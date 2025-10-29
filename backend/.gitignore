@@ -1,0 +1,21 @@
+This file tells Git which files and folders to ignore.
+
+1. Dependencies (For our Node.js server)
+node_modules/
+.DS_Store/
+
+2. Secret Files & API Keys (For our Node.js server)
+This is EXTREMELY IMPORTANT.
+
+These files contain your database password and private keys.
+
+NEVER upload these to a public GitHub repository.
+
+.env
+firebase-service-account.json
+
+3. Log/OS Files
+
+*.log
+.DS_Store
+
