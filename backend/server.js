@@ -1,37 +1,52 @@
-// טעינת משתני סביבה מקובץ .env
-require('dotenv').config();
-
 const express = require('express');
+const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
-const initializeFirebase = require('./config/firebaseAdmin');
+const initializeFirebaseAdmin = require('./config/firebaseAdmin');
 
-// התחברות לבסיס הנתונים
+// Load env vars
+dotenv.config({ path: './.env' });
+
+// Initialize Firebase Admin
+try {
+  initializeFirebaseAdmin();
+} catch (error) {
+  console.error('Error initializing Firebase Admin:', error.message);
+  // We don't want to crash the whole server if Firebase fails on start
+  // But we will log it.
+}
+
+// Connect to Database
 connectDB();
 
-// אתחול Firebase Admin
-initializeFirebase();
-
-// יצירת אפליקציית Express
 const app = express();
 
-// הפעלת CORS (Cross-Origin Resource Sharing)
-// זה מאפשר לאפליקציית React Native שלנו לתקשר עם השרת
-app.use(cors());
-
-// הפעלת מנתח JSON מובנה ב-Express
-// זה מאפשר לשרת לקרוא JSON מגוף הבקשה
+// Body Parser Middleware (allows us to accept JSON data)
 app.use(express.json());
 
-// נתיב (Route) בדיקה בסיסי
-app.get('/', (req, res) => {
-  res.json({ message: 'Smart Shopping List API is running!' });
-});
+// Enable CORS (so our app can talk to our server)
+app.use(cors());
 
-// הגדרת הפורט
+// --- Define Routes ---
+// We tell Express: "For any URL that starts with '/api/auth',
+// hand it off to our new 'authRoutes' file."
+app.use('/api/auth', require('./routes/auth'));
+// We will add more routes here (e.g., /api/list, /api/household)
+
+// --- End of Routes ---
+
 const PORT = process.env.PORT || 5000;
 
-// הפעלת השרת
-app.listen(PORT, () => {
+// We save the server instance
+const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
+
+// Handle unhandled promise rejections (like DB connection errors)
+// This is a safety net that prevents the server from crashing badly
+process.on('unhandledRejection', (err, promise) => {
+  console.error(`Error: ${err.message}`);
+  // Close server & exit process
+  server.close(() => process.exit(1));
+});
+
