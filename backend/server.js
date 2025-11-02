@@ -29,9 +29,12 @@ app.use(cors());
 // This is the auth route we already built
 app.use('/api/auth', require('./routes/auth'));
 
-// THIS IS THE NEW LINE:
-// For any URL starting with '/api/list', hand it to 'listRoutes'.
+// This is the list route we just built
 app.use('/api/list', require('./routes/list'));
+
+// THIS IS THE NEW LINE:
+// For any URL starting with '/api/household', hand it to 'householdRoutes'.
+app.use('/api/household', require('./routes/household'));
 
 // --- End of Routes ---
 
