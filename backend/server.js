@@ -12,8 +12,6 @@ try {
   initializeFirebaseAdmin();
 } catch (error) {
   console.error('Error initializing Firebase Admin:', error.message);
-  // We don't want to crash the whole server if Firebase fails on start
-  // But we will log it.
 }
 
 // Connect to Database
@@ -28,25 +26,27 @@ app.use(express.json());
 app.use(cors());
 
 // --- Define Routes ---
-// We tell Express: "For any URL that starts with '/api/auth',
-// hand it off to our new 'authRoutes' file."
+// This is the auth route we already built
 app.use('/api/auth', require('./routes/auth'));
-// We will add more routes here (e.g., /api/list, /api/household)
+
+// This is the list route we just built
+app.use('/api/list', require('./routes/list'));
+
+// THIS IS THE NEW LINE:
+// For any URL starting with '/api/household', hand it to 'householdRoutes'.
+app.use('/api/household', require('./routes/household'));
 
 // --- End of Routes ---
 
 const PORT = process.env.PORT || 5000;
 
-// We save the server instance
 const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
 
-// Handle unhandled promise rejections (like DB connection errors)
-// This is a safety net that prevents the server from crashing badly
+// Handle unhandled promise rejections
 process.on('unhandledRejection', (err, promise) => {
   console.error(`Error: ${err.message}`);
-  // Close server & exit process
   server.close(() => process.exit(1));
 });
 
