@@ -1,20 +1,18 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+
+// --- THIS IS THE CRITICAL LINE ---
+// This line *must* be here.
+// It imports your firebaseConfig.js file, which runs
+// the `initializeApp(firebaseConfig)` command.
+// This is what "turns on" Firebase for your whole app.
+import './firebaseConfig';
+// ---------------------------------
+
+import LoginScreen from './screens/LoginScreen';
 
 export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!!!!!!!!!!!!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
+  // Now, when LoginScreen is shown, Firebase will
+  // already be initialized, and the error will be gone.
+  return <LoginScreen />;
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
