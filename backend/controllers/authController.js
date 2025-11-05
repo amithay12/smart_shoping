@@ -1,4 +1,4 @@
-const admin = require('../config/firebaseAdmin'); // Our Firebase connection
+const admin = require('firebase-admin'); // Our Firebase connection
 const User = require('../models/User'); // Our User "blueprint"
 const Household = require('../models/Household'); // Our Household "blueprint"
 const ShoppingList = require('../models/ShoppingList'); // Our ShoppingList "blueprint"

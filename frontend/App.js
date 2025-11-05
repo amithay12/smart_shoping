@@ -6,7 +6,7 @@ import React from 'react';
 // the `initializeApp(firebaseConfig)` command.
 // This is what "turns on" Firebase for your whole app.
 import './firebaseConfig';
-// ---------------------------------
+
 
 import LoginScreen from './screens/LoginScreen';
 
