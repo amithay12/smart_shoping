@@ -1,18 +1,23 @@
-import React from 'react';
+// We no longer need to import LoginScreen here!
+// We only import our "Global Brain" and our "Traffic Cop"
 
-// --- THIS IS THE CRITICAL LINE ---
-// This line *must* be here.
-// It imports your firebaseConfig.js file, which runs
-// the `initializeApp(firebaseConfig)` command.
-// This is what "turns on" Firebase for your whole app.
-import './firebaseConfig';
+import { AuthProvider } from './context/AuthContext';
+import AppNavigator from './navigation/AppNavigator';
 
-
-import LoginScreen from './screens/LoginScreen';
-
+// This is our new, final App.js
 export default function App() {
-  // Now, when LoginScreen is shown, Firebase will
-  // already be initialized, and the error will be gone.
-  return <LoginScreen />;
-}
+  return (
+    // 1. "Turn on" the "Global Brain".
+    // Any component inside this AuthProvider
+    // can now access our 'userToken', 'userInfo', 'login', etc.
+    <AuthProvider>
+      
+      {/* 2. Show the "Traffic Cop".
+          AppNavigator will now decide which screen to show
+          (Login or Home) based on the user's login status.
+      */}
+      <AppNavigator />
 
+    </AuthProvider>
+  );
+}
