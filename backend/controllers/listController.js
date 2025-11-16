@@ -1,22 +1,20 @@
+// THIS IS THE TEXT-ONLY CODE FOR:
+// backend/controllers/listController.js
+
 const ShoppingList = require('../models/ShoppingList');
 const ChangeHistory = require('../models/ChangeHistory');
 const mongoose = require('mongoose');
+const User = require('../models/User'); 
 
-// @desc    Get the user's shopping list
+// Get list (no change)
 exports.getShoppingList = async (req, res) => {
   try {
-    // req.user is attached by our "protect" middleware
     const householdId = req.user.household;
-
-    const list = await ShoppingList.findOne({ household: householdId }).populate(
-      'items.addedBy',
-      'displayName email'
-    );
-
+    const list = await ShoppingList.findOne({ household: householdId })
+      .populate('items.addedBy', 'displayName email');
     if (!list) {
       return res.status(404).json({ message: 'Shopping list not found' });
     }
-
     res.status(200).json(list);
   } catch (error) {
     console.error(error);
@@ -24,30 +22,23 @@ exports.getShoppingList = async (req, res) => {
   }
 };
 
-// @desc    Add an item to the list
+// Add item (no change)
 exports.addItem = async (req, res) => {
   try {
     const { name, quantity } = req.body;
     const userId = req.user._id;
     const householdId = req.user.household;
-
-    // 1. Create the new item object
     const newItem = {
       name,
-      quantity: quantity || '1', // Default to '1' if no quantity is given
+      quantity: quantity || '1',
       addedBy: userId,
       isPurchased: false,
     };
-
-    // 2. Find the household's list and push the new item into its "items" array
     const updatedList = await ShoppingList.findOneAndUpdate(
       { household: householdId },
       { $push: { items: newItem } },
-      { new: true, runValidators: true } // "new: true" returns the *updated* document
-    ).populate('items.addedBy', 'displayName email');
-
-    // 3. Log this action in our ChangeHistory
-    // We do this "in the background" (don't need to "await" it)
+      { new: true, runValidators: true }
+    );
     ChangeHistory.create({
       household: householdId,
       user: userId,
@@ -57,58 +48,70 @@ exports.addItem = async (req, res) => {
         quantity: newItem.quantity,
       },
     });
-
-    res.status(201).json(updatedList);
+    const populatedList = await updatedList.populate('items.addedBy', 'displayName email');
+    res.status(201).json(populatedList);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-// @desc    Update an item on the list
+// --- THIS IS THE UPDATED FUNCTION ---
+// @desc    Update an item
 exports.updateItem = async (req, res) => {
+  console.log('--- BACKEND: updateItem FUNCTION CALLED ---'); // <-- DEBUG LOG
   try {
-    const { itemId } = req.params; // Get the item's ID from the URL
-    const { name, quantity, isPurchased } = req.body; // Get the new data
+    const { itemId } = req.params;
+    const { name, quantity, isPurchased } = req.body;
     const householdId = req.user.household;
     const userId = req.user._id;
 
-    // 1. Find the list
+    console.log(`BACKEND: Updating item ${itemId} to isPurchased: ${isPurchased}`); // <-- DEBUG LOG
+
     const list = await ShoppingList.findOne({ household: householdId });
     if (!list) {
+      console.log('BACKEND: Error - List not found'); // <-- DEBUG LOG
       return res.status(404).json({ message: 'List not found' });
     }
 
-    // 2. Find the specific item in the list's "items" array
     const item = list.items.id(itemId);
     if (!item) {
+      console.log('BACKEND: Error - Item not found'); // <-- DEBUG LOG
       return res.status(404).json({ message: 'Item not found' });
     }
     
-    // 3. Store the *previous* state for our history log
     const previousState = {
       name: item.name,
       quantity: item.quantity,
       isPurchased: item.isPurchased
     };
     
-    let actionType = 'UPDATE_ITEM'; // Default action
+    let actionType = 'UPDATE_ITEM';
 
-    // 4. Update the item's fields
+    // Update the item's fields in memory
     if (name !== undefined) item.name = name;
     if (quantity !== undefined) item.quantity = quantity;
     if (isPurchased !== undefined) {
       item.isPurchased = isPurchased;
-      // If the "isPurchased" field is what changed, log it as a specific action
       if (previousState.isPurchased !== isPurchased) {
         actionType = isPurchased ? 'PURCHASE_ITEM' : 'UNDO_PURCHASE';
       }
     }
+    
+    // This is the fix we added before
+    list.markModified('items');
+    console.log('BACKEND: markModified("items") called.'); // <-- DEBUG LOG
 
-    // 5. Save the *entire* list document
-    const updatedList = await list.save();
+    // Save the parent document
+    await list.save();
+    console.log('BACKEND: list.save() completed.'); // <-- DEBUG LOG
+    
+    // Find the item *after* saving to be 100% sure it saved
+    const verifyList = await ShoppingList.findOne({ household: householdId });
+    const verifiedItem = verifyList.items.id(itemId);
+    console.log(`BACKEND: After save, isPurchased is: ${verifiedItem.isPurchased}`); // <-- DEBUG LOG
 
-    // 6. Log this action
+    // Log this action (no change)
     ChangeHistory.create({
       household: householdId,
       user: userId,
@@ -117,39 +120,40 @@ exports.updateItem = async (req, res) => {
         name: item.name,
         quantity: item.quantity,
       },
-      previousState: previousState, // Log the old data
+      previousState: previousState,
     });
 
-    // 7. Repopulate the data before sending it back
-    const populatedList = await updatedList.populate('items.addedBy', 'displayName email');
+    // Repopulate and send back
+    const populatedList = await verifyList.populate('items.addedBy', 'displayName email');
+    console.log('--- BACKEND: updateItem FUNCTION SUCCESS ---'); // <-- DEBUG LOG
     res.status(200).json(populatedList);
 
   } catch (error) {
-    console.error(error);
+    console.error('--- BACKEND: updateItem CRASHED ---:', error); // <-- DEBUG LOG
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-// @desc    Remove an item from the list
+// --- THIS IS THE UPDATED FUNCTION ---
+// @desc    Remove an item
 exports.removeItem = async (req, res) => {
+  console.log('--- BACKEND: removeItem FUNCTION CALLED ---'); // <-- DEBUG LOG
   try {
     const { itemId } = req.params;
     const householdId = req.user.household;
     const userId = req.user._id;
 
-    // 1. Find the list
     const list = await ShoppingList.findOne({ household: householdId });
     if (!list) {
       return res.status(404).json({ message: 'List not found' });
     }
 
-    // 2. Find the specific item
     const item = list.items.id(itemId);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
     
-    // 3. Log the details *before* we remove it
+    // Log details (no change)
     ChangeHistory.create({
       household: householdId,
       user: userId,
@@ -160,17 +164,18 @@ exports.removeItem = async (req, res) => {
       },
     });
 
-    // 4. Remove the item from the array
-    item.remove();
+    // This is the fix from before
+    await item.deleteOne();
+    console.log(`BACKEND: item.deleteOne() called for item ${itemId}`); // <-- DEBUG LOG
     
-    // 5. Save the list
     await list.save();
     
     const populatedList = await list.populate('items.addedBy', 'displayName email');
+    console.log('--- BACKEND: removeItem FUNCTION SUCCESS ---'); // <-- DEBUG LOG
     res.status(200).json(populatedList);
     
   } catch (error) {
-    console.error(error);
+    console.error('--- BACKEND: removeItem CRASHED ---:', error); // <-- DEBUG LOG
     res.status(500).json({ message: 'Server error' });
   }
 };
