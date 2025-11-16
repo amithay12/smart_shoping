@@ -1,4 +1,4 @@
-const admin = require('../config/firebaseAdmin');
+const admin = require('firebase-admin'); // <--- זה התיקון!
 const User = require('../models/User');
 
 // This middleware will run on almost every API request

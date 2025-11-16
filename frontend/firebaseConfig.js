@@ -1,6 +1,11 @@
 // Import the functions we will need
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import {
+  initializeAuth,
+  getReactNativePersistence,
+} from 'firebase/auth';
+// We import the "memory" (AsyncStorage) we installed
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
@@ -17,6 +22,13 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firebase Authentication and export it
-export const auth = getAuth(app);
+// --- NEW, FIXED AUTH INITIALIZATION ---
+// This is the fix for the warning and the 401 error.
+// We are telling Firebase:
+// 1. initializeAuth() (the new way)
+// 2. Use our 'app'
+// 3. For persistence (memory), please use AsyncStorage
+export const auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(AsyncStorage),
+});
 
