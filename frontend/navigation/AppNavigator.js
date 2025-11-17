@@ -1,31 +1,27 @@
 import React, { useContext } from 'react';
-
-// 1. IMPORT NAVIGATION TOOLS
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-
-// 2. IMPORT OUR "GLOBAL BRAIN"
 import { AuthContext } from '../context/AuthContext';
-
-// 3. IMPORT OUR SCREENS
 import LoginScreen from '../screens/LoginScreen';
+
 // --- THIS IS THE CHANGE ---
-// We now import our new ShoppingListScreen...
-import ShoppingListScreen from '../screens/ShoppingListScreen';
-// ...and we no longer need the old HomeScreen
+// We now import our new TabNavigator...
+import TabNavigator from './TabNavigator'; 
+// ...and we no longer need to import the individual screens here.
 // --------------------------
+
 import { View, ActivityIndicator } from 'react-native';
 
-// 4. CREATE THE "STACKS" (Groups of Screens)
+// 4. CREATE THE STACK
 const Stack = createNativeStackNavigator();
 
 // This is our main "Traffic Cop" component
 export default function AppNavigator() {
   
-  // 5. CHECK THE "GLOBAL BRAIN"
+  // 5. CHECK THE "GLOBAL BRAIN" (Same as before)
   const { userToken, isLoading } = useContext(AuthContext);
 
-  // 6. SHOW A LOADING SPINNER
+  // 6. SHOW A LOADING SPINNER (Same as before)
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -34,7 +30,7 @@ export default function AppNavigator() {
     );
   }
 
-  // 7. THE "TRAFFIC COP" LOGIC
+  // 7. THE "TRAFFIC COP" LOGIC (This is the key change)
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -44,8 +40,9 @@ export default function AppNavigator() {
         ) : (
           // "App Stack" (Logged In)
           // --- THIS IS THE CHANGE ---
-          // We now show the ShoppingListScreen after login
-          <Stack.Screen name="Home" component={ShoppingListScreen} />
+          // Instead of showing just one screen,
+          // we now show our *entire* TabNavigator component.
+          <Stack.Screen name="App" component={TabNavigator} />
           // --------------------------
         )}
       </Stack.Navigator>
