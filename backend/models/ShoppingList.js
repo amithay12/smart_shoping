@@ -52,4 +52,7 @@ const shoppingListSchema = new mongoose.Schema(
   }
 );
 
+// Note: household already has an index from 'unique: true' above
+// No need to add another index
+
 module.exports = mongoose.model('ShoppingList', shoppingListSchema);

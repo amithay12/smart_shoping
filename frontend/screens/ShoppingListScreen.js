@@ -67,8 +67,6 @@ export default function ShoppingListScreen() {
 
   // This handles Toggling Purchase (Calls our fixed PUT API)
   const handleTogglePurchase = async (item) => {
-    console.log('--- FRONTEND: handleTogglePurchase CALLED ---');
-    console.log('FRONTEND: Toggling item:', item.name, 'Current state:', item.isPurchased);
     try {
       const response = await axios.put(
         `${API_URL}/api/list/item/${item._id}`, 
@@ -79,28 +77,23 @@ export default function ShoppingListScreen() {
         },
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-      console.log('FRONTEND: Received NEW list from server.');
-      const updatedItem = response.data.items.find(i => i._id === item._id);
-      console.log('FRONTEND: New item state from server is:', updatedItem.isPurchased);
       setItems(response.data.items); 
     } catch (error) {
-      console.error('--- FRONTEND: handleTogglePurchase CRASHED ---:', error.message);
+      console.error('Error updating item:', error.message);
       Alert.alert('Error', 'Could not update the item.');
     }
   };
 
   // This handles Deleting Item (Calls our fixed DELETE API)
   const handleDeleteItem = async (item) => {
-    console.log('--- FRONTEND: handleDeleteItem CALLED ---');
     try {
       const response = await axios.delete(
         `${API_URL}/api/list/item/${item._id}`, 
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-      console.log('FRONTEND: Received NEW list from server after delete.');
       setItems(response.data.items); 
     } catch (error) {
-      console.error('--- FRONTEND: handleDeleteItem CRASHED ---:', error.message);
+      console.error('Error deleting item:', error.message);
       Alert.alert('Error', 'Could not delete the item.');
     }
   };

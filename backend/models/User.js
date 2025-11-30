@@ -41,6 +41,9 @@ const userSchema = new mongoose.Schema(
   }
 );
 
+// Note: firebaseUid already has an index from 'unique: true' above
+// No need to add another index
+
 // This "exports" our blueprint as a model named 'User'.
 // Mongoose will automatically create a collection named 'users' (plural, lowercase)
 // in the MongoDB database.

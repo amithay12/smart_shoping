@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons'; // ספריית האייקוני�
 import ShoppingListScreen from '../screens/ShoppingListScreen';
 import HouseholdScreen from '../screens/HouseholdScreen';
 import HistoryScreen from '../screens/HistoryScreen';
+import RecommendationsScreen from '../screens/RecommendationsScreen';
 
 // צבעי המותג שלנו
 const COLORS = {
@@ -39,6 +40,8 @@ export default function TabNavigator() {
             iconName = focused ? 'people-circle' : 'people-circle-outline';
           } else if (route.name === 'History') {
             iconName = focused ? 'time' : 'time-outline';
+          } else if (route.name === 'Recommendations') {
+            iconName = focused ? 'bulb' : 'bulb-outline';
           }
 
           // החזרת רכיב האייקון
@@ -61,6 +64,11 @@ export default function TabNavigator() {
         name="History" 
         component={HistoryScreen} 
         options={{ title: 'History' }} 
+      />
+      <Tab.Screen 
+        name="Recommendations" 
+        component={RecommendationsScreen} 
+        options={{ title: 'Recommendations' }} 
       />
     </Tab.Navigator>
   );
