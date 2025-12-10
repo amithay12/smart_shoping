@@ -1,4 +1,5 @@
 import React, { useState, useContext, useCallback } from 'react';
+import { emit } from '../utils/eventBus';
 import {
   View,
   Text,
@@ -75,7 +76,9 @@ export default function ShoppingListScreen() {
         { name: newItemName, quantity: '1' },
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-      setItems(response.data.items); 
+      setItems(response.data.items);
+      // Emit change event so other screens (Recommendations) refresh automatically
+      emit('shoppingList:changed');
       setNewItemName('');
       Keyboard.dismiss();
     } catch (error) {
@@ -96,7 +99,9 @@ export default function ShoppingListScreen() {
         },
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-      setItems(response.data.items); 
+      setItems(response.data.items);
+      // Emit change event so other screens (Recommendations) refresh automatically
+      emit('shoppingList:changed');
     } catch (error) {
       console.error('Error updating item:', error.message);
       Alert.alert('Error', 'Could not update the item.');
@@ -110,7 +115,9 @@ export default function ShoppingListScreen() {
         `${API_URL}/api/list/item/${item._id}`, 
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-      setItems(response.data.items); 
+      setItems(response.data.items);
+      // Emit change event so other screens (Recommendations) refresh automatically
+      emit('shoppingList:changed');
     } catch (error) {
       console.error('Error deleting item:', error.message);
       Alert.alert('Error', 'Could not delete the item.');

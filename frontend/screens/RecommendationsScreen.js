@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,12 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { AuthContext } from '../context/AuthContext';
+import { on } from '../utils/eventBus';
 import axios from 'axios';
 
 const API_URL = 'http://10.0.2.2:5001';
@@ -24,15 +27,40 @@ export default function RecommendationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [addingItemId, setAddingItemId] = useState(null);
 
-  // Fetch recommendations when screen loads
+  // Fetch on initial mount / token change
   useEffect(() => {
     if (userToken) {
-      fetchRecommendations();
+      fetchRecommendations(false); // show spinner on first load
     }
   }, [userToken]);
 
-  const fetchRecommendations = async () => {
-    setIsLoading(true);
+  // Refresh on screen focus
+  useFocusEffect(
+    useCallback(() => {
+      if (userToken) fetchRecommendations(true); // silent refresh
+    }, [userToken])
+  );
+
+  // Listen for list changes from anywhere in the app
+  useEffect(() => {
+    const unsubscribe = on('shoppingList:changed', () => {
+      if (userToken) fetchRecommendations(true); // silent refresh
+    });
+    return unsubscribe;
+  }, [userToken]);
+
+  // Refresh when app returns from background
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && userToken) {
+        fetchRecommendations(true); // silent refresh
+      }
+    });
+    return () => sub.remove();
+  }, [userToken]);
+
+  const fetchRecommendations = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const response = await axios.get(`${API_URL}/api/recommendations`, {
         headers: { Authorization: `Bearer ${userToken}` },
@@ -44,34 +72,28 @@ export default function RecommendationsScreen() {
         Alert.alert('Error', 'Could not fetch recommendations.');
       }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchRecommendations();
+    await fetchRecommendations(true);
     setRefreshing(false);
   };
 
   const handleAddToList = async (item) => {
     setAddingItemId(item.name);
     try {
-      // Call the existing add item endpoint
       await axios.post(
         `${API_URL}/api/list/item`,
-        { 
-          name: item.name, 
-          quantity: item.quantity || '1' 
-        },
+        { name: item.name, quantity: item.quantity || '1' },
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
-
-      // Remove the item from recommendations
-      setRecommendations(prev => 
-        prev.filter(rec => rec.name !== item.name)
-      );
-
+      // Optimistically remove it locally
+      setRecommendations((prev) => prev.filter((rec) => rec.name !== item.name));
+      // Pull fresh recs after the list changed
+      fetchRecommendations(true);
       Alert.alert('Success!', `${item.name} added to your shopping list.`);
     } catch (error) {
       console.error('Error adding item:', error.message);
@@ -115,10 +137,7 @@ export default function RecommendationsScreen() {
         )}
       </View>
       <TouchableOpacity
-        style={[
-          styles.addButton,
-          addingItemId === item.name && styles.addButtonDisabled
-        ]}
+        style={[styles.addButton, addingItemId === item.name && styles.addButtonDisabled]}
         onPress={() => handleAddToList(item)}
         disabled={addingItemId === item.name}
       >
@@ -137,9 +156,7 @@ export default function RecommendationsScreen() {
 
       <View style={styles.header}>
         <Text style={styles.title}>Smart Recommendations</Text>
-        <Text style={styles.subtitle}>
-          Based on your shopping history
-        </Text>
+        <Text style={styles.subtitle}>Based on your shopping history</Text>
       </View>
 
       {isLoading && recommendations.length === 0 ? (
@@ -155,11 +172,7 @@ export default function RecommendationsScreen() {
           style={styles.list}
           contentContainerStyle={styles.listContent}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#28a745']}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#28a745']} />
           }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -167,10 +180,7 @@ export default function RecommendationsScreen() {
               <Text style={styles.emptyText}>
                 Keep shopping and marking items as purchased to get personalized recommendations!
               </Text>
-              <TouchableOpacity
-                style={styles.refreshButton}
-                onPress={onRefresh}
-              >
+              <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
                 <Text style={styles.refreshButtonText}>Refresh</Text>
               </TouchableOpacity>
             </View>
@@ -182,10 +192,7 @@ export default function RecommendationsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
   header: {
     backgroundColor: '#fff',
     paddingHorizontal: 20,
@@ -194,34 +201,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 5,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  loadingText: {
-    marginTop: 15,
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-  },
-  list: {
-    flex: 1,
-  },
-  listContent: {
-    padding: 15,
-  },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#333', marginBottom: 5 },
+  subtitle: { fontSize: 14, color: '#666' },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  loadingText: { marginTop: 15, fontSize: 16, color: '#666', textAlign: 'center' },
+  list: { flex: 1 },
+  listContent: { padding: 15 },
   recommendationCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -236,38 +221,12 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  itemInfo: {
-    flex: 1,
-    marginRight: 12,
-  },
-  itemName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
-  },
-  metaContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  metaText: {
-    fontSize: 13,
-    color: '#666',
-    marginRight: 6,
-  },
-  lastPurchaseText: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 4,
-  },
-  quantityText: {
-    fontSize: 13,
-    color: '#28a745',
-    fontWeight: '500',
-    marginTop: 4,
-  },
+  itemInfo: { flex: 1, marginRight: 12 },
+  itemName: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 8 },
+  metaContainer: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 },
+  metaText: { fontSize: 13, color: '#666', marginRight: 6 },
+  lastPurchaseText: { fontSize: 12, color: '#999', marginTop: 4 },
+  quantityText: { fontSize: 13, color: '#28a745', fontWeight: '500', marginTop: 4 },
   addButton: {
     backgroundColor: '#28a745',
     paddingHorizontal: 20,
@@ -277,45 +236,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addButtonDisabled: {
-    opacity: 0.6,
-  },
-  addButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-    marginTop: 100,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 20,
-  },
-  refreshButton: {
-    backgroundColor: '#28a745',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  refreshButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  addButtonDisabled: { opacity: 0.6 },
+  addButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, marginTop: 100 },
+  emptyTitle: { fontSize: 20, fontWeight: '600', color: '#333', marginBottom: 10, textAlign: 'center' },
+  emptyText: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+  refreshButton: { backgroundColor: '#28a745', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  refreshButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 });
-
