@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native'; // <--- ADDED THIS IMPORT
 import { AuthContext } from '../context/AuthContext';
 import axios from 'axios';
 
@@ -24,26 +25,44 @@ export default function ShoppingListScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [newItemName, setNewItemName] = useState('');
 
-  // This hook fetches the list when the screen loads
-  useEffect(() => {
-    const fetchShoppingList = async () => {
-      setIsLoading(true);
-      try {
-        const response = await axios.get(`${API_URL}/api/list`, {
-          headers: { Authorization: `Bearer ${userToken}` },
-        });
-        setItems(response.data.items);
-      } catch (error) {
-        console.error('Error fetching list:', error.message);
-        Alert.alert('Error', 'Could not fetch your shopping list.');
-      }
-      setIsLoading(false);
-    };
+  // --- CHANGED: Replaced useEffect with useFocusEffect ---
+  // This ensures the list refreshes every time you switch back to this tab.
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true; // Use a flag to prevent setting state if screen unmounts
 
-    if (userToken) {
-      fetchShoppingList();
-    }
-  }, [userToken]);
+      const fetchShoppingList = async () => {
+        // Only show loading spinner if list is empty (for smoother UX)
+        if (items.length === 0) setIsLoading(true);
+        
+        try {
+          const response = await axios.get(`${API_URL}/api/list`, {
+            headers: { Authorization: `Bearer ${userToken}` },
+          });
+          
+          if (isActive) {
+            setItems(response.data.items);
+          }
+        } catch (error) {
+          console.error('Error fetching list:', error.message);
+          // Optional: You can uncomment this if you want an alert every time connection fails
+          // Alert.alert('Error', 'Could not fetch your shopping list.');
+        }
+        
+        if (isActive) setIsLoading(false);
+      };
+
+      if (userToken) {
+        fetchShoppingList();
+      }
+
+      // Cleanup function to avoid memory leaks
+      return () => {
+        isActive = false;
+      };
+    }, [userToken]) // Removed 'items.length' dependency to avoid loops
+  );
+  // --- END OF CHANGE ---
 
   // This adds a new item
   const handleAddItem = async () => {
@@ -65,7 +84,7 @@ export default function ShoppingListScreen() {
     }
   };
 
-  // This handles Toggling Purchase (Calls our fixed PUT API)
+  // This handles Toggling Purchase
   const handleTogglePurchase = async (item) => {
     try {
       const response = await axios.put(
@@ -84,7 +103,7 @@ export default function ShoppingListScreen() {
     }
   };
 
-  // This handles Deleting Item (Calls our fixed DELETE API)
+  // This handles Deleting Item
   const handleDeleteItem = async (item) => {
     try {
       const response = await axios.delete(
@@ -106,7 +125,6 @@ export default function ShoppingListScreen() {
       item.name, 
       'What would you like to do?', 
       [
-        
         {
           text: purchaseText,
           onPress: () => handleTogglePurchase(item),
@@ -124,15 +142,12 @@ export default function ShoppingListScreen() {
     );
   };
 
-  // --- THIS IS THE FIX! ---
-  // We are updating renderItem to use the correct property name
   const renderItem = ({ item }) => (
     <TouchableOpacity onLongPress={() => handleItemOptions(item)}>
       <View style={styles.itemContainer}>
         <Text
           style={[
             styles.itemName,
-            // THE BUG WAS HERE: It should be item.isPurchased
             item.isPurchased && styles.itemPurchased, 
           ]}
         >
@@ -155,7 +170,7 @@ export default function ShoppingListScreen() {
       </View>
       <Text style={styles.subtitle}>Welcome, {userInfo?.email}!</Text>
 
-      {isLoading ? (
+      {isLoading && items.length === 0 ? (
         <ActivityIndicator size="large" color="#000" style={styles.loader} />
       ) : (
         <FlatList
@@ -185,7 +200,6 @@ export default function ShoppingListScreen() {
   );
 }
 
-// --- STYLES (with the .itemPurchased fix) ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -237,8 +251,8 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   itemPurchased: {
-    textDecorationLine: 'line-through', // This adds the line!
-    color: '#aaa', // This makes the text gray
+    textDecorationLine: 'line-through', 
+    color: '#aaa', 
   },
   itemQuantity: {
     fontSize: 16,
@@ -279,4 +293,4 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-}); 
+});
