@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native'; // <--- ADDED THIS IMPORT
 import { AuthContext } from '../context/AuthContext';
 import axios from 'axios';
+import BarcodeScanner from '../components/BarcodeScanner';
 
 const API_URL = 'http://10.0.2.2:5001';
 
@@ -25,6 +26,7 @@ export default function ShoppingListScreen() {
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [newItemName, setNewItemName] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
 
   // --- CHANGED: Replaced useEffect with useFocusEffect ---
   // This ensures the list refreshes every time you switch back to this tab.
@@ -171,9 +173,17 @@ export default function ShoppingListScreen() {
 
       <View style={styles.header}>
         <Text style={styles.title}>My Shopping List</Text>
-        <TouchableOpacity onPress={logout}>
-          <Text style={styles.logoutButton}>Logout</Text>
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity
+            style={styles.scanButton}
+            onPress={() => setShowScanner(true)}
+          >
+            <Text style={styles.scanButtonText}>📷 Scan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={logout}>
+            <Text style={styles.logoutButton}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       <Text style={styles.subtitle}>Welcome, {userInfo?.email}!</Text>
 
@@ -190,6 +200,34 @@ export default function ShoppingListScreen() {
           }
         />
       )}
+
+      {/* Barcode Scanner */}
+      <BarcodeScanner
+        visible={showScanner}
+        onClose={() => setShowScanner(false)}
+        onProductFound={async (product) => {
+          setShowScanner(false);
+          try {
+            const response = await axios.post(
+              `${API_URL}/api/list/item`,
+              {
+                name: product.name,
+                quantity: '1',
+                productId: product._id,
+                barcode: product.barcode,
+              },
+              { headers: { Authorization: `Bearer ${userToken}` } }
+            );
+            setItems(response.data.items);
+            emit('shoppingList:changed');
+            Alert.alert('Success!', `${product.name} added to your list.`);
+          } catch (error) {
+            console.error('Error adding product:', error);
+            Alert.alert('Error', 'Could not add product to list.');
+          }
+        }}
+        userToken={userToken}
+      />
 
       {/* Add Item Form */}
       <View style={styles.formContainer}>
@@ -219,6 +257,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 10,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scanButton: {
+    backgroundColor: '#28a745',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  scanButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   title: {
     fontSize: 28,

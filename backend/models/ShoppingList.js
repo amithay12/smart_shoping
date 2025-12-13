@@ -13,6 +13,16 @@ const shoppingListItemSchema = new mongoose.Schema({
     type: String, // Using String for "1", "2 kg", "1 pack", etc.
     default: '1',
   },
+  // Link to Product model (optional - for price comparison)
+  product: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+  },
+  // Barcode (can be stored directly for quick lookup)
+  barcode: {
+    type: String,
+    trim: true,
+  },
   addedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
