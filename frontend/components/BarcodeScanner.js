@@ -14,18 +14,8 @@ import axios from 'axios';
 
 const API_URL = 'http://10.0.2.2:5001';
 
-// Try to import BarCodeScanner, but handle if it's not available (Expo Go)
-let BarCodeScanner = null;
-let isNativeModuleAvailable = false;
-
-try {
-  const barcodeModule = require('expo-barcode-scanner');
-  BarCodeScanner = barcodeModule.BarCodeScanner || barcodeModule.default;
-  isNativeModuleAvailable = BarCodeScanner !== null;
-} catch (error) {
-  console.log('Barcode scanner native module not available - using manual input only');
-  isNativeModuleAvailable = false;
-}
+// Manual input only - camera scanning disabled due to build issues
+const isNativeModuleAvailable = false;
 
 export default function BarcodeScanner({ visible, onClose, onProductFound, userToken }) {
   const [hasPermission, setHasPermission] = useState(null);
@@ -48,29 +38,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
     }
   }, [visible]);
 
-  const requestCameraPermission = async () => {
-    if (!BarCodeScanner) {
-      setHasPermission(false);
-      setShowManualInput(true);
-      return;
-    }
-    
-    try {
-      const { status } = await BarCodeScanner.requestPermissionsAsync();
-      setHasPermission(status === 'granted');
-    } catch (error) {
-      console.error('Permission request error:', error);
-      setHasPermission(false);
-      setShowManualInput(true);
-    }
-  };
-
-  const handleBarCodeScanned = async ({ type, data }) => {
-    if (scanned) return;
-    
-    setScanned(true);
-    await lookupProduct(data);
-  };
+  // Camera scanning disabled - manual input only
 
   const handleManualSubmit = async () => {
     if (!manualBarcode.trim()) {
@@ -88,9 +56,23 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
       const response = await axios.get(`${API_URL}/api/products/barcode/${barcode}`);
       
       if (response.data.success && response.data.product) {
+        const product = response.data.product;
+        const prices = response.data.prices || [];
+        
+        // Build price message
+        let priceMessage = '';
+        if (prices.length > 0) {
+          priceMessage = '\n\n💰 Prices:\n';
+          prices.forEach((p, idx) => {
+            priceMessage += `${p.store.chain || p.store.name}: ₪${p.price.toFixed(2)}\n`;
+          });
+        } else {
+          priceMessage = '\n\n⚠️ Prices not available yet';
+        }
+        
         Alert.alert(
           'Product Found!',
-          `${response.data.product.name}\n${response.data.product.brand || ''}`,
+          `${product.name}\n${product.brand || ''}${priceMessage}`,
           [
             {
               text: 'Cancel',
@@ -104,7 +86,10 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               text: 'Add to List',
               onPress: () => {
                 if (onProductFound) {
-                  onProductFound(response.data.product);
+                  onProductFound({
+                    ...product,
+                    prices: prices, // Include prices
+                  });
                 }
                 handleClose();
               },
@@ -193,6 +178,9 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               keyboardType="numeric"
               autoFocus
               maxLength={20}
+              selectTextOnFocus
+              clearButtonMode="while-editing"
+              editable
             />
             {isLookingUp ? (
               <View style={styles.loadingContainer}>
@@ -304,6 +292,9 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               keyboardType="numeric"
               autoFocus
               maxLength={20}
+              selectTextOnFocus
+              clearButtonMode="while-editing"
+              editable
             />
             
             {isLookingUp ? (
@@ -337,62 +328,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
     );
   }
 
-  // Show camera scanner (only if native module available and permission granted)
-  if (hasPermission === true && BarCodeScanner) {
-    return (
-      <Modal visible={visible} animationType="slide" transparent={false}>
-        <View style={styles.container}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Scan Barcode</Text>
-            <TouchableOpacity onPress={handleClose}>
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
-          {isLookingUp ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#28a745" />
-              <Text style={styles.loadingText}>Looking up product...</Text>
-            </View>
-          ) : (
-            <View style={styles.scannerContainer}>
-              <BarCodeScanner
-                onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
-                style={StyleSheet.absoluteFillObject}
-                barCodeTypes={[
-                  BarCodeScanner.Constants.BarCodeType.ean13,
-                  BarCodeScanner.Constants.BarCodeType.ean8,
-                  BarCodeScanner.Constants.BarCodeType.upc_a,
-                  BarCodeScanner.Constants.BarCodeType.upc_e,
-                ]}
-              />
-              <View style={styles.overlay}>
-                <View style={styles.scanArea}>
-                  <View style={[styles.corner, styles.topLeft]} />
-                  <View style={[styles.corner, styles.topRight]} />
-                  <View style={[styles.corner, styles.bottomLeft]} />
-                  <View style={[styles.corner, styles.bottomRight]} />
-                </View>
-                <Text style={styles.instruction}>
-                  Position the barcode within the frame
-                </Text>
-              </View>
-            </View>
-          )}
-
-          <View style={styles.footer}>
-            <TouchableOpacity
-              style={styles.manualButton}
-              onPress={() => setShowManualInput(true)}
-            >
-              <Ionicons name="keyboard-outline" size={20} color="#28a745" />
-              <Text style={styles.manualButtonText}>Enter Manually</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    );
-  }
+  // Camera scanning disabled - manual input only
 
   // Fallback to manual input
   return (

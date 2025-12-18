@@ -6,7 +6,7 @@
 const ShufersalScraper = require('./shufersalScraper');
 const RamiLevyScraper = require('./ramiLevyScraper');
 const YohananofScraper = require('./yohananofScraper');
-const VictoryScraper = require('./victoryScraper');
+const CHPScraper = require('./chpScraper');
 const Store = require('../../models/Store');
 const StoreProduct = require('../../models/StoreProduct');
 const Product = require('../../models/Product');
@@ -17,7 +17,7 @@ class ScraperManager {
       'Shufersal': new ShufersalScraper(),
       'Rami Levy': new RamiLevyScraper(),
       'Yohananof': new YohananofScraper(),
-      'Victory': new VictoryScraper(),
+      'CHP': new CHPScraper(),
     };
   }
 

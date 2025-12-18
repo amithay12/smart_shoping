@@ -9,11 +9,11 @@ import {
   Alert,
   RefreshControl,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-// Location will be optional - use default if permission denied
 import { AuthContext } from '../context/AuthContext';
 import axios from 'axios';
 
@@ -28,11 +28,12 @@ export default function StoreComparisonScreen() {
   const [location, setLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [productPriceComparison, setProductPriceComparison] = useState(null);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
 
   useEffect(() => {
-    // Set default location immediately (Tel Aviv)
     setLocation({ latitude: 32.0853, longitude: 34.7818 });
-    // Try to get real location (optional)
     requestLocationPermission();
   }, []);
 
@@ -43,12 +44,8 @@ export default function StoreComparisonScreen() {
   }, [location, userToken]);
 
   const requestLocationPermission = async () => {
-    // Location is optional - we use default Tel Aviv location
-    // Users can manually set their location if needed
     try {
-      // Try to use location if available, but don't require it
       const Location = await import('expo-location').catch(() => null);
-      
       if (Location) {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
@@ -61,7 +58,6 @@ export default function StoreComparisonScreen() {
         }
       }
     } catch (error) {
-      // Silently fail - we already have default location
       console.log('Location not available, using default');
     }
   };
@@ -76,7 +72,7 @@ export default function StoreComparisonScreen() {
           lat: location.latitude,
           lng: location.longitude,
           maxDistance: 50,
-          maxStores: 3,
+          maxStores: 1, // Only single stores
         },
         headers: {
           Authorization: `Bearer ${userToken}`,
@@ -86,6 +82,7 @@ export default function StoreComparisonScreen() {
       if (response.data.success) {
         setOptions(response.data.options || []);
         setSummary(response.data.summary);
+        setProductPriceComparison(response.data.productPriceComparison || {});
       } else {
         Alert.alert('Error', response.data.message || 'Could not optimize basket');
       }
@@ -110,10 +107,15 @@ export default function StoreComparisonScreen() {
     setRefreshing(false);
   };
 
+  const showProductDetails = (option) => {
+    setSelectedOption(option);
+    setShowDetailsModal(true);
+  };
+
   const renderOption = ({ item, index }) => {
     const isBest = index === 0;
-    const storeCount = item.stores.length;
-    const savings = summary?.bestOption?.totalPrice
+    const store = item.stores[0];
+    const savings = summary?.bestOption?.totalPrice && index > 0
       ? summary.bestOption.totalPrice - item.totalPrice
       : 0;
 
@@ -122,34 +124,30 @@ export default function StoreComparisonScreen() {
         {isBest && (
           <View style={styles.bestBadge}>
             <Ionicons name="trophy" size={16} color="#fff" />
-            <Text style={styles.bestBadgeText}>Best Option</Text>
+            <Text style={styles.bestBadgeText}>Best Price</Text>
           </View>
         )}
 
         <View style={styles.optionHeader}>
-          <View style={styles.storeBadge}>
-            <Ionicons
-              name={storeCount === 1 ? 'storefront' : 'storefront-outline'}
-              size={20}
-              color="#28a745"
-            />
-            <Text style={styles.storeCount}>
-              {storeCount} {storeCount === 1 ? 'Store' : 'Stores'}
-            </Text>
+          <View style={styles.storeInfo}>
+            <Ionicons name="storefront" size={24} color="#28a745" />
+            <View style={styles.storeDetails}>
+              <Text style={styles.storeName}>{store.name}</Text>
+              {store.chain && (
+                <Text style={styles.storeChain}>{store.chain}</Text>
+              )}
+            </View>
           </View>
-          <Text style={styles.optionType}>
-            {item.type === 'single_store' ? 'Single Store' : 'Multi-Store'}
-          </Text>
         </View>
 
         <View style={styles.priceContainer}>
           <Text style={styles.priceLabel}>Total Price:</Text>
           <Text style={styles.price}>
-            ₪{item.totalPrice.toFixed(2)} {item.currency}
+            ₪{item.totalPrice.toFixed(2)}
           </Text>
-          {savings > 0 && index > 0 && (
+          {savings > 0 && (
             <Text style={styles.savings}>
-              Save ₪{savings.toFixed(2)}
+              Save ₪{savings.toFixed(2)} vs other stores
             </Text>
           )}
         </View>
@@ -168,31 +166,70 @@ export default function StoreComparisonScreen() {
           </Text>
         </View>
 
-        <View style={styles.storesList}>
-          {item.stores.map((store, idx) => (
-            <View key={idx} style={styles.storeItem}>
-              <Ionicons name="location" size={16} color="#666" />
-              <Text style={styles.storeName}>{store.name}</Text>
-              {store.chain && (
-                <Text style={styles.storeChain}>({store.chain})</Text>
-              )}
-            </View>
-          ))}
-        </View>
-
         <TouchableOpacity
           style={styles.detailsButton}
-          onPress={() => {
-            Alert.alert(
-              'Option Details',
-              `Stores: ${item.stores.map(s => s.name).join(', ')}\n\nItems: ${item.items.length}\nCoverage: ${item.coverage.toFixed(0)}%`,
-              [{ text: 'OK' }]
-            );
-          }}
+          onPress={() => showProductDetails(item)}
         >
-          <Text style={styles.detailsButtonText}>View Details</Text>
+          <Text style={styles.detailsButtonText}>View Product Prices</Text>
           <Ionicons name="chevron-forward" size={16} color="#28a745" />
         </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderProductPriceRow = (productId, productName) => {
+    if (!productPriceComparison || !productPriceComparison[productId]) {
+      return null;
+    }
+
+    const prices = productPriceComparison[productId];
+    const storeIds = Object.keys(prices);
+    
+    if (storeIds.length === 0) return null;
+
+    // Find cheapest and most expensive
+    const priceValues = storeIds.map(sid => prices[sid].price);
+    const cheapest = Math.min(...priceValues);
+    const mostExpensive = Math.max(...priceValues);
+
+    return (
+      <View key={productId} style={styles.productPriceRow}>
+        <Text style={styles.productName}>{productName}</Text>
+        <View style={styles.priceComparisonRow}>
+          {options.map((option, idx) => {
+            const storeId = option.stores[0]._id.toString();
+            const priceInfo = prices[storeId];
+            
+            if (!priceInfo) {
+              return (
+                <View key={idx} style={styles.priceCell}>
+                  <Text style={styles.priceUnavailable}>—</Text>
+                </View>
+              );
+            }
+
+            const isCheapest = priceInfo.price === cheapest && cheapest !== mostExpensive;
+            const isExpensive = priceInfo.price === mostExpensive && cheapest !== mostExpensive;
+
+            return (
+              <View key={idx} style={styles.priceCell}>
+                <Text style={[
+                  styles.priceValue,
+                  isCheapest && styles.priceCheapest,
+                  isExpensive && styles.priceExpensive,
+                ]}>
+                  ₪{priceInfo.price.toFixed(2)}
+                </Text>
+                {isCheapest && (
+                  <Ionicons name="arrow-down" size={12} color="#28a745" />
+                )}
+                {isExpensive && (
+                  <Ionicons name="arrow-up" size={12} color="#ff5722" />
+                )}
+              </View>
+            );
+          })}
+        </View>
       </View>
     );
   };
@@ -202,7 +239,7 @@ export default function StoreComparisonScreen() {
       <StatusBar barStyle="dark-content" />
 
       <View style={styles.header}>
-        <Text style={styles.title}>Best Shopping Options</Text>
+        <Text style={styles.title}>Store Comparison</Text>
         <TouchableOpacity onPress={onRefresh} disabled={isLoading}>
           <Ionicons
             name="refresh"
@@ -212,19 +249,10 @@ export default function StoreComparisonScreen() {
         </TouchableOpacity>
       </View>
 
-      {locationError && (
-        <View style={styles.warningBanner}>
-          <Ionicons name="warning" size={16} color="#ff9800" />
-          <Text style={styles.warningText}>
-            Using default location (Tel Aviv). Enable location for accurate results.
-          </Text>
-        </View>
-      )}
-
       {summary && (
         <View style={styles.summaryCard}>
           <Text style={styles.summaryText}>
-            Found {summary.storesFound} stores • {summary.itemsTotal} items in your list
+            Comparing {summary.storesFound} stores • {summary.itemsTotal} items
           </Text>
         </View>
       )}
@@ -232,10 +260,7 @@ export default function StoreComparisonScreen() {
       {isLoading && options.length === 0 ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#28a745" />
-          <Text style={styles.loadingText}>Finding best options...</Text>
-          <Text style={styles.loadingSubtext}>
-            Analyzing prices across stores
-          </Text>
+          <Text style={styles.loadingText}>Comparing prices...</Text>
         </View>
       ) : (
         <FlatList
@@ -270,6 +295,50 @@ export default function StoreComparisonScreen() {
           }
         />
       )}
+
+      {/* Product Price Details Modal */}
+      <Modal
+        visible={showDetailsModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setShowDetailsModal(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Product Prices Comparison</Text>
+            <TouchableOpacity onPress={() => setShowDetailsModal(false)}>
+              <Ionicons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+          </View>
+
+          {selectedOption && (
+            <ScrollView style={styles.modalContent}>
+              <View style={styles.storeHeaderRow}>
+                <Text style={styles.storeHeaderLabel}>Product</Text>
+                {options.map((opt, idx) => (
+                  <Text key={idx} style={styles.storeHeaderName}>
+                    {opt.stores[0].chain || opt.stores[0].name}
+                  </Text>
+                ))}
+              </View>
+
+              {selectedOption.items.map((item) => {
+                const productId = item.product._id.toString();
+                return renderProductPriceRow(productId, item.product.name || item.item.name);
+              })}
+
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Total</Text>
+                {options.map((opt, idx) => (
+                  <Text key={idx} style={styles.totalValue}>
+                    ₪{opt.totalPrice.toFixed(2)}
+                  </Text>
+                ))}
+              </View>
+            </ScrollView>
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -292,21 +361,6 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#333',
-  },
-  warningBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff3cd',
-    padding: 12,
-    marginHorizontal: 15,
-    marginTop: 10,
-    borderRadius: 8,
-    gap: 8,
-  },
-  warningText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#856404',
   },
   summaryCard: {
     backgroundColor: '#e8f5e9',
@@ -354,25 +408,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   optionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     marginBottom: 15,
   },
-  storeBadge: {
+  storeInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 12,
   },
-  storeCount: {
-    fontSize: 14,
+  storeDetails: {
+    flex: 1,
+  },
+  storeName: {
+    fontSize: 18,
     fontWeight: '600',
-    color: '#28a745',
+    color: '#333',
   },
-  optionType: {
-    fontSize: 12,
-    color: '#999',
-    textTransform: 'uppercase',
+  storeChain: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
   },
   priceContainer: {
     marginBottom: 15,
@@ -383,7 +437,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   price: {
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: 'bold',
     color: '#333',
   },
@@ -411,24 +465,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-  storesList: {
-    marginBottom: 15,
-  },
-  storeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-    gap: 8,
-  },
-  storeName: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
-  },
-  storeChain: {
-    fontSize: 12,
-    color: '#999',
-  },
   detailsButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -454,11 +490,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     fontWeight: '600',
-  },
-  loadingSubtext: {
-    marginTop: 5,
-    fontSize: 14,
-    color: '#999',
   },
   emptyContainer: {
     flex: 1,
@@ -492,5 +523,102 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  // Modal styles
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  modalContent: {
+    flex: 1,
+    padding: 15,
+  },
+  storeHeaderRow: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: '#28a745',
+    marginBottom: 10,
+  },
+  storeHeaderLabel: {
+    flex: 2,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  storeHeaderName: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    textAlign: 'center',
+  },
+  productPriceRow: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  productName: {
+    flex: 2,
+    fontSize: 14,
+    color: '#333',
+  },
+  priceComparisonRow: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  priceCell: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  priceValue: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '500',
+  },
+  priceCheapest: {
+    color: '#28a745',
+    fontWeight: '600',
+  },
+  priceExpensive: {
+    color: '#ff5722',
+  },
+  priceUnavailable: {
+    fontSize: 14,
+    color: '#ccc',
+  },
+  totalRow: {
+    flexDirection: 'row',
+    paddingVertical: 15,
+    marginTop: 10,
+    borderTopWidth: 2,
+    borderTopColor: '#28a745',
+  },
+  totalLabel: {
+    flex: 2,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  totalValue: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#28a745',
+    textAlign: 'center',
+  },
 });
-

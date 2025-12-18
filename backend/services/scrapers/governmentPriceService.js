@@ -1,215 +1,223 @@
 /**
  * Israeli Government Price Transparency Service
  * 
- * Since 2015, Israeli retailers must publish prices daily.
- * This service accesses the official Consumer Protection Authority data.
+ * Downloads and parses price files from the official government website:
+ * https://www.gov.il/he/pages/cpfta_prices_regulations
  * 
- * Documentation: https://www.gov.il/he/departments/legalInfo/cpfta_prices_regulations
+ * Each supermarket publishes daily XML files with all product prices.
+ * Files are typically named: PriceFull{StoreCode}-{YYYYMMDD}-{StoreNumber}.xml
  */
 
 const axios = require('axios');
 const https = require('https');
+const zlib = require('zlib');
+const xml2js = require('xml2js');
 
 class GovernmentPriceService {
   constructor() {
-    // Base URL for government price transparency system
-    this.baseUrl = 'https://prices.shufersal.co.il';
-    this.apiUrl = 'https://prices.shufersal.co.il/FileObject/GetFile';
-    
-    // Store codes in government system
-    this.storeCodes = {
-      'Shufersal': '7290027600007',
-      'Rami Levy': '7290027600008',
-      'Yohananof': '7290027600009',
-      'Victory': '7290027600010',
+    // Store configurations - only Shufersal, Rami Levy, and Yohananof
+    this.storeConfigs = {
+      'Shufersal': {
+        storeCode: '7290027600007',
+        // Government file URLs - these are the actual download links
+        baseUrl: 'https://prices.shufersal.co.il',
+        filePattern: 'PriceFull7290027600007-{DATE}-001.xml',
+      },
+      'Rami Levy': {
+        storeCode: '7290027600008',
+        baseUrl: 'https://prices.rami-levy.co.il',
+        filePattern: 'PriceFull7290027600008-{DATE}-001.xml',
+      },
+      'Yohananof': {
+        storeCode: '7290027600009',
+        baseUrl: 'https://prices.yohananof.co.il',
+        filePattern: 'PriceFull7290027600009-{DATE}-001.xml',
+      },
     };
 
     this.headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Accept': 'application/json, text/xml, */*',
+      'Accept': 'application/xml, text/xml, */*',
       'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
     };
+
+    // Cache for price files (in-memory)
+    this.priceFileCache = new Map();
   }
 
   /**
-   * Get today's price file for a store
-   * @param {string} storeName - Store name
-   * @returns {Promise<Object>} Price file data
+   * Get today's date string in YYYYMMDD format
    */
-  async getTodayPriceFile(storeName) {
-    try {
-      const storeCode = this.storeCodes[storeName];
-      if (!storeCode) {
-        throw new Error(`Unknown store: ${storeName}`);
-      }
+  getDateString(date = new Date()) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+  }
 
-      // Format: YYYYMMDD
-      const today = new Date();
-      const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-      
-      // Try different file ID formats
-      const fileIds = [
-        `${storeCode}_${dateStr}`,
-        `${storeCode}-${dateStr}`,
-        `Store${storeCode}_${dateStr}`,
-      ];
-
-      for (const fileId of fileIds) {
-        try {
-          const url = `${this.apiUrl}?fileId=${fileId}`;
-          const response = await axios.get(url, {
-            headers: this.headers,
-            timeout: 15000,
-            responseType: 'text',
-            // Allow self-signed certificates if needed
-            httpsAgent: new https.Agent({
-              rejectUnauthorized: false,
-            }),
-          });
-
-          if (response.data) {
-            return this.parsePriceFile(response.data);
-          }
-        } catch (error) {
-          // Try next format
-          continue;
-        }
-      }
-
-      // If today's file not found, try yesterday
-      return await this.getPriceFile(storeName, new Date(Date.now() - 86400000));
-    } catch (error) {
-      console.error(`Error getting price file for ${storeName}:`, error.message);
-      return null;
+  /**
+   * Download price file from government website
+   */
+  async downloadPriceFile(storeName, date = new Date()) {
+    const config = this.storeConfigs[storeName];
+    if (!config) {
+      throw new Error(`Unknown store: ${storeName}`);
     }
+
+    const dateStr = this.getDateString(date);
+    const cacheKey = `${storeName}_${dateStr}`;
+    
+    // Check cache first
+    if (this.priceFileCache.has(cacheKey)) {
+      return this.priceFileCache.get(cacheKey);
+    }
+
+    // Try different file name patterns
+    const filePatterns = [
+      `PriceFull${config.storeCode}-${dateStr}-001.xml`,
+      `PriceFull${config.storeCode}-${dateStr}.xml`,
+      `PriceFull${config.storeCode}-${dateStr}-001.xml.gz`,
+      `PriceFull${config.storeCode}-${dateStr}.xml.gz`,
+      `PriceFull${config.storeCode}-${dateStr}-001.zip`,
+    ];
+
+    // Also try direct paths
+    const directPaths = [
+      `/FileObject/GetFile?fileId=PriceFull${config.storeCode}-${dateStr}-001.xml`,
+      `/FileObject/GetFile?fileId=PriceFull${config.storeCode}-${dateStr}.xml`,
+      `/PriceFull${config.storeCode}-${dateStr}-001.xml`,
+      `/PriceFull${config.storeCode}-${dateStr}.xml`,
+      `/prices/PriceFull${config.storeCode}-${dateStr}-001.xml`,
+    ];
+
+    for (const pattern of filePatterns) {
+      try {
+        const url = `${config.baseUrl}/${pattern}`;
+        const result = await this.fetchFile(url);
+        if (result) {
+          this.priceFileCache.set(cacheKey, result);
+          return result;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+
+    // Try direct paths
+    for (const path of directPaths) {
+      try {
+        const url = `${config.baseUrl}${path}`;
+        const result = await this.fetchFile(url);
+        if (result) {
+          this.priceFileCache.set(cacheKey, result);
+          return result;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+
+    // If today's file not found, try yesterday
+    if (date.getTime() === new Date().setHours(0, 0, 0, 0)) {
+      const yesterday = new Date(date);
+      yesterday.setDate(yesterday.getDate() - 1);
+      console.log(`Today's file not found for ${storeName}, trying yesterday...`);
+      return await this.downloadPriceFile(storeName, yesterday);
+    }
+
+    return null;
   }
 
   /**
-   * Get price file for a specific date
+   * Fetch file from URL (handles gzip, xml, etc.)
    */
-  async getPriceFile(storeName, date) {
-    const storeCode = this.storeCodes[storeName];
-    const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-    
-    const fileId = `${storeCode}_${dateStr}`;
-    const url = `${this.apiUrl}?fileId=${fileId}`;
-
+  async fetchFile(url) {
     try {
       const response = await axios.get(url, {
         headers: this.headers,
-        timeout: 15000,
-        responseType: 'text',
-        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        timeout: 30000,
+        responseType: 'arraybuffer',
+        maxContentLength: 200 * 1024 * 1024, // 200MB max
+        httpsAgent: new https.Agent({
+          rejectUnauthorized: false,
+        }),
       });
 
-      return this.parsePriceFile(response.data);
+      if (!response.data || response.data.length === 0) {
+        return null;
+      }
+
+      let data = Buffer.from(response.data);
+      
+      // Check if gzipped
+      if (data[0] === 0x1f && data[1] === 0x8b) {
+        data = zlib.gunzipSync(data);
+      }
+
+      const xmlString = data.toString('utf-8');
+      
+      // Parse XML
+      const parser = new xml2js.Parser({
+        explicitArray: false,
+        mergeAttrs: true,
+        trim: true,
+      });
+
+      const parsed = await parser.parseStringPromise(xmlString);
+      return parsed;
     } catch (error) {
-      console.error(`Error getting price file: ${error.message}`);
-      return null;
+      if (error.response && error.response.status === 404) {
+        return null; // File not found
+      }
+      throw error;
     }
   }
 
   /**
-   * Parse price file (XML or JSON)
+   * Extract products from parsed XML
    */
-  parsePriceFile(fileData) {
+  extractProducts(xmlData) {
     try {
-      // Try JSON first
-      if (fileData.trim().startsWith('{') || fileData.trim().startsWith('[')) {
-        return JSON.parse(fileData);
-      }
-
-      // Try XML
-      if (fileData.includes('<?xml') || fileData.includes('<')) {
-        // For now, return raw XML - will be parsed by xml2js in scraper
-        return { type: 'xml', data: fileData };
-      }
-
-      // Try CSV
-      if (fileData.includes(',')) {
-        return this.parseCSV(fileData);
-      }
-
-      return null;
+      // Common XML structure: Root -> Items -> Item[]
+      const items = xmlData?.Root?.Items?.Item || 
+                   xmlData?.Items?.Item || 
+                   xmlData?.Item || [];
+      
+      const products = Array.isArray(items) ? items : [items];
+      return products.filter(Boolean);
     } catch (error) {
-      console.error('Error parsing price file:', error.message);
-      return null;
+      console.error('Error extracting products:', error.message);
+      return [];
     }
   }
 
   /**
-   * Parse CSV format
-   */
-  parseCSV(csvData) {
-    const lines = csvData.split('\n');
-    const headers = lines[0].split(',').map(h => h.trim());
-    const products = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      if (!lines[i].trim()) continue;
-      
-      const values = lines[i].split(',').map(v => v.trim());
-      const product = {};
-      
-      headers.forEach((header, index) => {
-        product[header] = values[index] || '';
-      });
-      
-      products.push(product);
-    }
-
-    return { products, type: 'csv' };
-  }
-
-  /**
-   * Search product by barcode across all stores
-   */
-  async searchByBarcode(barcode) {
-    const results = [];
-
-    for (const storeName of Object.keys(this.storeCodes)) {
-      try {
-        const priceFile = await this.getTodayPriceFile(storeName);
-        if (!priceFile) continue;
-
-        const products = priceFile.products || priceFile.Items || priceFile.data?.products || [];
-        const product = products.find(p => 
-          p.barcode === barcode || 
-          p.EAN === barcode || 
-          p.ItemCode === barcode ||
-          p.Barcode === barcode
-        );
-
-        if (product) {
-          results.push({
-            store: storeName,
-            product: this.normalizeProduct(product),
-          });
-        }
-
-        // Rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (error) {
-        console.error(`Error searching ${storeName}:`, error.message);
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Normalize product data from different formats
+   * Normalize product data from XML
    */
   normalizeProduct(product) {
+    // Handle both object and array formats from xml2js
+    const getValue = (obj, ...keys) => {
+      for (const key of keys) {
+        if (obj && obj[key] !== undefined) {
+          return String(obj[key]).trim();
+        }
+      }
+      return '';
+    };
+
+    const price = this.normalizePrice(
+      getValue(product, 'ItemPrice', 'Price', 'FinalPrice', 'price')
+    );
+
     return {
-      name: product.name || product.ItemName || product.ProductName || product.Description,
-      barcode: product.barcode || product.EAN || product.ItemCode || product.Barcode,
-      price: this.normalizePrice(product.price || product.Price || product.ItemPrice || product.FinalPrice),
-      originalPrice: this.normalizePrice(product.originalPrice || product.OriginalPrice || product.ItemOriginalPrice),
-      unit: product.unit || product.Unit || product.UnitOfMeasure,
-      size: product.size || product.Size || product.Quantity,
-      brand: product.brand || product.Brand || product.Manufacturer,
-      category: product.category || product.Category || product.CategoryName,
+      name: getValue(product, 'ItemName', 'ProductName', 'Description', 'name') || 'Unknown Product',
+      barcode: getValue(product, 'ItemCode', 'EAN', 'Barcode', 'barcode') || '',
+      price: price,
+      unit: getValue(product, 'UnitOfMeasure', 'Unit', 'unit') || '',
+      size: getValue(product, 'Quantity', 'Size', 'size') || '',
+      brand: getValue(product, 'ManufacturerName', 'Brand', 'brand') || '',
+      category: getValue(product, 'CategoryName', 'Category', 'category') || '',
     };
   }
 
@@ -228,7 +236,87 @@ class GovernmentPriceService {
     const price = parseFloat(cleaned);
     return isNaN(price) ? null : price;
   }
+
+  /**
+   * Get today's price file for a store
+   */
+  async getTodayPriceFile(storeName) {
+    try {
+      const xmlData = await this.downloadPriceFile(storeName);
+      if (!xmlData) {
+        return null;
+      }
+
+      const products = this.extractProducts(xmlData);
+      
+      return {
+        type: 'xml',
+        products: products.map(p => this.normalizeProduct(p)),
+        raw: xmlData,
+      };
+    } catch (error) {
+      console.error(`Error getting price file for ${storeName}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Search product by barcode across all stores
+   */
+  async searchByBarcode(barcode) {
+    const results = [];
+
+    for (const storeName of Object.keys(this.storeConfigs)) {
+      try {
+        const priceFile = await this.getTodayPriceFile(storeName);
+        if (!priceFile || !priceFile.products) continue;
+
+        const product = priceFile.products.find(p => {
+          return p.barcode === barcode || 
+                 p.barcode === String(barcode) ||
+                 p.barcode.replace(/\D/g, '') === String(barcode).replace(/\D/g, '');
+        });
+
+        if (product && product.price) {
+          results.push({
+            store: storeName,
+            product: product,
+          });
+        }
+
+        // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        console.error(`Error searching ${storeName}:`, error.message);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get top products from a store (for seeding database)
+   */
+  async getTopProducts(storeName, limit = 500) {
+    try {
+      const priceFile = await this.getTodayPriceFile(storeName);
+      if (!priceFile || !priceFile.products) {
+        return [];
+      }
+
+      // Filter products with valid barcodes and prices
+      const validProducts = priceFile.products.filter(p => 
+        p.barcode && p.barcode.length >= 8 && p.price && p.price > 0
+      );
+
+      // Sort by price (or you could sort by popularity if available)
+      // For now, just return first N products
+      return validProducts.slice(0, limit);
+    } catch (error) {
+      console.error(`Error getting top products for ${storeName}:`, error.message);
+      return [];
+    }
+  }
 }
 
 module.exports = new GovernmentPriceService();
-

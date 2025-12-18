@@ -38,7 +38,7 @@ exports.optimizeBasket = async (req, res) => {
       });
     }
 
-    // Get nearby stores
+    // Get nearby stores - show all active stores, prices will be shown where available
     let stores = [];
     if (lat && lng) {
       const coordinates = [parseFloat(lng), parseFloat(lat)];
@@ -55,9 +55,8 @@ exports.optimizeBasket = async (req, res) => {
             $maxDistance: distance,
           },
         },
-      }).limit(20); // Limit to 20 nearest stores
+      }).limit(20);
     } else {
-      // If no location provided, get all active stores
       stores = await Store.find({ isActive: true }).limit(20);
     }
 
@@ -142,109 +141,31 @@ exports.optimizeBasket = async (req, res) => {
           type: 'single_store',
           stores: [store.toObject()],
           totalPrice: Math.round(totalPrice * 100) / 100,
-          currency: 'USD',
+          currency: 'ILS',
           itemsFound,
           itemsTotal: unpurchasedItems.length,
           coverage: Math.round(coverage * 100) / 100,
-          items,
+          items, // Detailed items with prices
         });
       }
     }
 
-    // Option 2: Two stores (if we have enough stores)
-    if (stores.length >= 2 && parseInt(maxStores) >= 2) {
-      for (let i = 0; i < stores.length; i++) {
-        for (let j = i + 1; j < stores.length; j++) {
-          const store1 = stores[i];
-          const store2 = stores[j];
-          const store1Id = store1._id.toString();
-          const store2Id = store2._id.toString();
-
-          let totalPrice = 0;
-          let itemsFound = 0;
-          const items = [];
-
-          for (const listItem of unpurchasedItems) {
-            if (!listItem.product) continue;
-
-            const productId = listItem.product._id.toString();
-            const price1 = priceMap[productId]?.[store1Id];
-            const price2 = priceMap[productId]?.[store2Id];
-
-            if (price1 && price2) {
-              // Choose cheaper option
-              if (price1.price <= price2.price) {
-                totalPrice += price1.price;
-                items.push({
-                  item: {
-                    _id: listItem._id,
-                    name: listItem.name,
-                    quantity: listItem.quantity,
-                  },
-                  product: listItem.product,
-                  price: price1.price,
-                  currency: price1.currency,
-                  store: store1.toObject(),
-                });
-              } else {
-                totalPrice += price2.price;
-                items.push({
-                  item: {
-                    _id: listItem._id,
-                    name: listItem.name,
-                    quantity: listItem.quantity,
-                  },
-                  product: listItem.product,
-                  price: price2.price,
-                  currency: price2.currency,
-                  store: store2.toObject(),
-                });
-              }
-              itemsFound++;
-            } else if (price1) {
-              totalPrice += price1.price;
-              items.push({
-                item: {
-                  _id: listItem._id,
-                  name: listItem.name,
-                  quantity: listItem.quantity,
-                },
-                product: listItem.product,
-                price: price1.price,
-                currency: price1.currency,
-                store: store1.toObject(),
-              });
-              itemsFound++;
-            } else if (price2) {
-              totalPrice += price2.price;
-              items.push({
-                item: {
-                  _id: listItem._id,
-                  name: listItem.name,
-                  quantity: listItem.quantity,
-                },
-                product: listItem.product,
-                price: price2.price,
-                currency: price2.currency,
-                store: store2.toObject(),
-              });
-              itemsFound++;
-            }
-          }
-
-          if (itemsFound > 0) {
-            const coverage = (itemsFound / unpurchasedItems.length) * 100;
-            options.push({
-              type: 'two_stores',
-              stores: [store1.toObject(), store2.toObject()],
-              totalPrice: Math.round(totalPrice * 100) / 100,
-              currency: 'USD',
-              itemsFound,
-              itemsTotal: unpurchasedItems.length,
-              coverage: Math.round(coverage * 100) / 100,
-              items,
-            });
-          }
+    // Build product price comparison: productId -> { storeId: price, ... }
+    const productPriceComparison = {};
+    for (const listItem of unpurchasedItems) {
+      if (!listItem.product) continue;
+      const productId = listItem.product._id.toString();
+      productPriceComparison[productId] = {};
+      
+      for (const store of stores) {
+        const storeId = store._id.toString();
+        const priceInfo = priceMap[productId]?.[storeId];
+        if (priceInfo) {
+          productPriceComparison[productId][storeId] = {
+            price: priceInfo.price,
+            currency: priceInfo.currency,
+            store: store.toObject(),
+          };
         }
       }
     }
@@ -257,29 +178,16 @@ exports.optimizeBasket = async (req, res) => {
       return a.totalPrice - b.totalPrice; // Lower price first
     });
 
-    // Filter to only show options with good coverage (at least 2 stores that have all items)
-    // Or show top 5 options
-    const filteredOptions = options
-      .filter(opt => {
-        // Prefer options where at least 2-3 stores have all items
-        if (opt.type === 'two_stores' && opt.coverage === 100) {
-          return true;
-        }
-        // Or single store with good coverage
-        if (opt.type === 'single_store' && opt.coverage >= 80) {
-          return true;
-        }
-        return false;
-      })
-      .slice(0, 5); // Top 5 options
-
-    // If no filtered options, return top options anyway
-    const finalOptions = filteredOptions.length > 0 ? filteredOptions : options.slice(0, 5);
+    // Only show single-store options (no multi-store)
+    const finalOptions = options
+      .filter(opt => opt.type === 'single_store')
+      .slice(0, 10); // Top 10 single-store options
 
     res.status(200).json({
       success: true,
       options: finalOptions,
-      totalOptions: options.length,
+      totalOptions: finalOptions.length,
+      productPriceComparison, // Price comparison for each product across stores
       summary: {
         itemsTotal: unpurchasedItems.length,
         storesFound: stores.length,
