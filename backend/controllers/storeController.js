@@ -145,14 +145,17 @@ exports.getProductPrices = async (req, res) => {
       store: { $in: storeIds },
       isAvailable: true,
     })
-      .populate('store', 'name chain address location')
+      .populate('store', 'name chain address location storeType')
       .sort({ price: 1 }); // Sort by price ascending
 
     res.status(200).json({
       success: true,
       product: product.toObject(),
       prices: storeProducts.map(sp => ({
-        store: sp.store,
+        store: {
+          ...sp.store.toObject(),
+          storeType: sp.store.storeType || 'physical',
+        },
         price: sp.price,
         currency: sp.currency,
         unitPrice: sp.unitPrice,

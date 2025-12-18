@@ -8,9 +8,18 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+
+// Conditionally import expo-location (optional - requires native module)
+let Location = null;
+try {
+  Location = require('expo-location');
+} catch (error) {
+  console.log('expo-location not available:', error.message);
+}
 
 const API_URL = 'http://10.0.2.2:5001';
 
@@ -23,6 +32,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
   const [manualBarcode, setManualBarcode] = useState('');
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [showManualInput, setShowManualInput] = useState(false);
+  const [city, setCity] = useState('');
 
   useEffect(() => {
     if (visible) {
@@ -35,6 +45,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
       }
       setScanned(false);
       setManualBarcode('');
+      setCity('');
     }
   }, [visible]);
 
@@ -53,7 +64,36 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
   const lookupProduct = async (barcode) => {
     setIsLookingUp(true);
     try {
-      const response = await axios.get(`${API_URL}/api/products/barcode/${barcode}`);
+      // Try to get user location for physical store prices (optional)
+      let locationParams = {};
+      if (Location) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const location = await Location.getCurrentPositionAsync({});
+            locationParams.lat = location.coords.latitude;
+            locationParams.lng = location.coords.longitude;
+          }
+        } catch (error) {
+          // Location not available, continue without it
+          console.log('Location not available:', error.message);
+        }
+      }
+
+      // Build query params
+      const params = new URLSearchParams();
+      if (locationParams.lat) params.append('lat', locationParams.lat);
+      if (locationParams.lng) params.append('lng', locationParams.lng);
+      if (city && city.trim()) {
+        params.append('city', city.trim());
+        console.log('Sending city to backend:', city.trim());
+      }
+      
+      const queryString = params.toString();
+      const url = `${API_URL}/api/products/barcode/${barcode}${queryString ? '?' + queryString : ''}`;
+      
+      console.log('Fetching product from:', url);
+      const response = await axios.get(url);
       
       if (response.data.success && response.data.product) {
         const product = response.data.product;
@@ -64,7 +104,16 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
         if (prices.length > 0) {
           priceMessage = '\n\n💰 Prices:\n';
           prices.forEach((p, idx) => {
-            priceMessage += `${p.store.chain || p.store.name}: ₪${p.price.toFixed(2)}\n`;
+            const price = p.price || p.store?.price || 0;
+            const chain = p.store?.chain || '';
+            const storeName = p.store?.name || 'Unknown Store';
+            // Format: "Store Name (Chain)" or just "Store Name" if no chain
+            const displayName = chain && chain !== storeName 
+              ? `${storeName} (${chain})` 
+              : storeName;
+            if (price > 0) {
+              priceMessage += `${displayName}: ₪${price.toFixed(2)}\n`;
+            }
           });
         } else {
           priceMessage = '\n\n⚠️ Prices not available yet';
@@ -147,6 +196,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
     setScanned(false);
     setIsLookingUp(false);
     setManualBarcode('');
+    setCity('');
     setShowManualInput(false);
     onClose();
   };
@@ -164,7 +214,11 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
-          <View style={styles.content}>
+          <ScrollView 
+            style={styles.scrollContent}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+          >
             <Ionicons name="barcode-outline" size={64} color="#28a745" style={styles.icon} />
             <Text style={styles.message}>Camera scanning requires a development build</Text>
             <Text style={styles.subMessage}>
@@ -181,6 +235,20 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               selectTextOnFocus
               clearButtonMode="while-editing"
               editable
+            />
+            <Text style={styles.label}>City (optional - for physical store prices)</Text>
+            <TextInput
+              style={styles.cityInput}
+              placeholder="Enter city name (e.g., תל אביב, ירושלים)"
+              value={city}
+              onChangeText={setCity}
+              textAlign="right"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              clearButtonMode="while-editing"
+              multiline={false}
+              keyboardType="default"
             />
             {isLookingUp ? (
               <View style={styles.loadingContainer}>
@@ -204,7 +272,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
                 </TouchableOpacity>
               </View>
             )}
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     );
@@ -278,7 +346,11 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
             </TouchableOpacity>
           </View>
           
-          <View style={styles.content}>
+          <ScrollView 
+            style={styles.scrollContent}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+          >
             <Ionicons name="barcode-outline" size={64} color="#28a745" style={styles.icon} />
             <Text style={styles.instruction}>
               Enter the product barcode number
@@ -295,6 +367,20 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               selectTextOnFocus
               clearButtonMode="while-editing"
               editable
+            />
+            <Text style={styles.label}>City (optional - for physical store prices)</Text>
+            <TextInput
+              style={styles.cityInput}
+              placeholder="Enter city name (e.g., תל אביב, ירושלים)"
+              value={city}
+              onChangeText={setCity}
+              textAlign="right"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              clearButtonMode="while-editing"
+              multiline={false}
+              keyboardType="default"
             />
             
             {isLookingUp ? (
@@ -322,7 +408,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
                 </TouchableOpacity>
               </View>
             )}
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     );
@@ -340,7 +426,11 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
             <Ionicons name="close" size={28} color="#333" />
           </TouchableOpacity>
         </View>
-        <View style={styles.content}>
+        <ScrollView 
+          style={styles.scrollContent}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
           <Ionicons name="barcode-outline" size={64} color="#28a745" style={styles.icon} />
           <Text style={styles.instruction}>
             Enter the product barcode number
@@ -353,6 +443,15 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
             keyboardType="numeric"
             autoFocus
             maxLength={20}
+          />
+          <Text style={styles.label}>City (optional - for physical store prices)</Text>
+          <TextInput
+            style={styles.cityInput}
+            placeholder="Enter city name (e.g., תל אביב, ירושלים)"
+            value={city}
+            onChangeText={setCity}
+            autoCapitalize="words"
+            clearButtonMode="while-editing"
           />
           {isLookingUp ? (
             <View style={styles.loadingContainer}>
@@ -376,7 +475,7 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
               </TouchableOpacity>
             </View>
           )}
-        </View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -485,10 +584,12 @@ const styles = StyleSheet.create({
     marginTop: 15,
     fontSize: 16,
   },
-  content: {
+  scrollContent: {
     flex: 1,
+  },
+  content: {
     padding: 30,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
     backgroundColor: '#fff',
   },
@@ -529,9 +630,27 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     fontSize: 20,
     textAlign: 'center',
+    marginBottom: 15,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+  },
+  label: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  cityInput: {
+    width: '100%',
+    backgroundColor: '#f5f5f5',
+    padding: 15,
+    borderRadius: 12,
+    fontSize: 18,
     marginBottom: 30,
     borderWidth: 2,
     borderColor: '#e0e0e0',
+    textAlign: 'right',
+    paddingRight: 15,
   },
   buttonRow: {
     flexDirection: 'row',

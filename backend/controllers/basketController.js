@@ -83,7 +83,7 @@ exports.optimizeBasket = async (req, res) => {
       inStock: true,
     })
       .populate('product', 'name brand barcode')
-      .populate('store', 'name chain address location');
+      .populate('store', 'name chain address location storeType');
 
     // Build price map: productId -> storeId -> price
     const priceMap = {};
@@ -170,18 +170,44 @@ exports.optimizeBasket = async (req, res) => {
       }
     }
 
-    // Sort options by: coverage (desc), then price (asc)
+    // Sort options by: store type (physical first), then coverage (desc), then price (asc)
     options.sort((a, b) => {
+      const storeA = a.stores[0];
+      const storeB = b.stores[0];
+      const typeA = storeA.storeType || 'physical';
+      const typeB = storeB.storeType || 'physical';
+      
+      // Physical stores first
+      if (typeA !== typeB) {
+        if (typeA === 'physical') return -1;
+        if (typeB === 'physical') return 1;
+      }
+      
+      // Then by coverage
       if (Math.abs(a.coverage - b.coverage) > 0.01) {
         return b.coverage - a.coverage; // Higher coverage first
       }
+      
+      // Finally by price
       return a.totalPrice - b.totalPrice; // Lower price first
     });
 
-    // Only show single-store options (no multi-store)
-    const finalOptions = options
-      .filter(opt => opt.type === 'single_store')
-      .slice(0, 10); // Top 10 single-store options
+    // Separate physical and online stores
+    const physicalOptions = options.filter(opt => {
+      const storeType = opt.stores[0]?.storeType || 'physical';
+      return storeType === 'physical' && opt.type === 'single_store';
+    });
+    
+    const onlineOptions = options.filter(opt => {
+      const storeType = opt.stores[0]?.storeType || 'physical';
+      return storeType === 'online' && opt.type === 'single_store';
+    });
+
+    // Combine: physical first, then online
+    const finalOptions = [
+      ...physicalOptions.slice(0, 10),
+      ...onlineOptions.slice(0, 10),
+    ];
 
     res.status(200).json({
       success: true,

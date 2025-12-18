@@ -31,6 +31,8 @@ export default function StoreComparisonScreen() {
   const [productPriceComparison, setProductPriceComparison] = useState(null);
   const [selectedOption, setSelectedOption] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [physicalOptions, setPhysicalOptions] = useState([]);
+  const [onlineOptions, setOnlineOptions] = useState([]);
 
   useEffect(() => {
     setLocation({ latitude: 32.0853, longitude: 34.7818 });
@@ -80,7 +82,21 @@ export default function StoreComparisonScreen() {
       });
 
       if (response.data.success) {
-        setOptions(response.data.options || []);
+        const allOptions = response.data.options || [];
+        setOptions(allOptions);
+        
+        // Separate physical and online stores
+        const physical = allOptions.filter(opt => {
+          const storeType = opt.stores[0]?.storeType || 'physical';
+          return storeType === 'physical';
+        });
+        const online = allOptions.filter(opt => {
+          const storeType = opt.stores[0]?.storeType || 'physical';
+          return storeType === 'online';
+        });
+        
+        setPhysicalOptions(physical);
+        setOnlineOptions(online);
         setSummary(response.data.summary);
         setProductPriceComparison(response.data.productPriceComparison || {});
       } else {
@@ -115,6 +131,8 @@ export default function StoreComparisonScreen() {
   const renderOption = ({ item, index }) => {
     const isBest = index === 0;
     const store = item.stores[0];
+    const storeType = store.storeType || 'physical';
+    const isPhysical = storeType === 'physical';
     const savings = summary?.bestOption?.totalPrice && index > 0
       ? summary.bestOption.totalPrice - item.totalPrice
       : 0;
@@ -130,9 +148,20 @@ export default function StoreComparisonScreen() {
 
         <View style={styles.optionHeader}>
           <View style={styles.storeInfo}>
-            <Ionicons name="storefront" size={24} color="#28a745" />
+            <Ionicons 
+              name={isPhysical ? "storefront" : "globe"} 
+              size={24} 
+              color={isPhysical ? "#28a745" : "#2196F3"} 
+            />
             <View style={styles.storeDetails}>
-              <Text style={styles.storeName}>{store.name}</Text>
+              <View style={styles.storeNameRow}>
+                <Text style={styles.storeName}>{store.name}</Text>
+                <View style={[styles.storeTypeBadge, isPhysical ? styles.physicalBadge : styles.onlineBadge]}>
+                  <Text style={styles.storeTypeText}>
+                    {isPhysical ? 'Physical' : 'Online'}
+                  </Text>
+                </View>
+              </View>
               {store.chain && (
                 <Text style={styles.storeChain}>{store.chain}</Text>
               )}
@@ -264,9 +293,36 @@ export default function StoreComparisonScreen() {
         </View>
       ) : (
         <FlatList
-          data={options}
-          renderItem={renderOption}
-          keyExtractor={(item, index) => `option-${index}`}
+          data={[
+            ...physicalOptions.map((item, idx) => ({ ...item, section: 'physical', index: idx })),
+            ...onlineOptions.map((item, idx) => ({ ...item, section: 'online', index: idx })),
+          ]}
+          renderItem={({ item, index }) => {
+            // Show section header before first physical store and before first online store
+            const isFirstPhysical = item.section === 'physical' && index === 0;
+            const isFirstOnline = item.section === 'online' && 
+              physicalOptions.length > 0 && 
+              index === physicalOptions.length;
+            
+            return (
+              <>
+                {isFirstPhysical && (
+                  <View style={styles.sectionHeader}>
+                    <Ionicons name="storefront" size={20} color="#28a745" />
+                    <Text style={styles.sectionHeaderText}>Physical Supermarkets</Text>
+                  </View>
+                )}
+                {isFirstOnline && (
+                  <View style={styles.sectionHeader}>
+                    <Ionicons name="globe" size={20} color="#2196F3" />
+                    <Text style={styles.sectionHeaderText}>Online Stores</Text>
+                  </View>
+                )}
+                {renderOption({ item, index: item.index })}
+              </>
+            );
+          }}
+          keyExtractor={(item, index) => `option-${item.section}-${item.index}`}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl
@@ -427,6 +483,41 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 2,
+  },
+  storeNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  storeTypeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  physicalBadge: {
+    backgroundColor: '#e8f5e9',
+  },
+  onlineBadge: {
+    backgroundColor: '#e3f2fd',
+  },
+  storeTypeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#333',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 5,
+    marginTop: 10,
+    marginBottom: 5,
+    gap: 8,
+  },
+  sectionHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
   },
   priceContainer: {
     marginBottom: 15,

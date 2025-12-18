@@ -19,21 +19,33 @@ class CHPScraper extends BaseScraper {
   /**
    * Search product by barcode
    * @param {string} barcode - Product barcode
+   * @param {Object} locationOptions - Location options for physical store prices
+   * @param {string} locationOptions.city - City name (e.g., "תל אביב", "ירושלים")
+   * @param {string} locationOptions.street - Street name (optional)
+   * @param {number} locationOptions.cityId - City ID from CHP (optional)
+   * @param {number} locationOptions.streetId - Street ID from CHP (optional)
    * @returns {Promise<Object|null>} Product data with prices from multiple stores
    */
-  async searchByBarcode(barcode) {
+  async searchByBarcode(barcode, locationOptions = {}) {
     try {
       const barcodeClean = barcode.trim();
+      const {
+        city = '',
+        street = '',
+        cityId = 0,
+        streetId = 0,
+      } = locationOptions;
       
       // Use autocomplete API to find product by barcode (fast endpoint)
+      // If city is provided, CHP will show prices from physical stores in that city
       const response = await axios.get(`${this.apiBase}${this.autocompleteEndpoint}`, {
         params: {
           term: barcodeClean,
           from: 0,
           u: Math.random(),
-          shopping_address: '',
-          shopping_address_city_id: 0,
-          shopping_address_street_id: 0,
+          shopping_address: city || street || '',
+          shopping_address_city_id: cityId || 0,
+          shopping_address_street_id: streetId || 0,
         },
         headers: this.headers,
         timeout: 5000, // Reduced timeout to 5 seconds
@@ -103,8 +115,29 @@ class CHPScraper extends BaseScraper {
       // Don't wait for full price comparison page which is slow
       const basicProduct = this.parseAutocompleteProduct(product);
       
-      // If we have price range in autocomplete, use it
-      if (basicProduct.price) {
+      // If city is provided, we need full store details (not just basic price)
+      // Always try to get full details when city is provided to get actual store names
+      if (locationOptions.city && product.id && product.id !== 'prev' && product.id !== 'next') {
+        console.log(`[CHP] City provided, fetching full product details for physical stores...`);
+        try {
+          const fullDetails = await Promise.race([
+            this.getProductDetails(product.id, barcode.trim(), locationOptions),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Timeout')), 12000) // 12 second max wait for city searches
+            ),
+          ]);
+          if (fullDetails && fullDetails.pricesByStore && fullDetails.pricesByStore.length > 0) {
+            console.log(`[CHP] Got ${fullDetails.pricesByStore.length} stores from full details`);
+            return fullDetails;
+          }
+        } catch (error) {
+          console.log(`[CHP] Full details fetch timed out or failed: ${error.message}`);
+          // Fall through to basic product if full details fail
+        }
+      }
+      
+      // If we have price range in autocomplete and no city, use it
+      if (basicProduct.price && !locationOptions.city) {
         return {
           ...basicProduct,
           pricesByStore: [{
@@ -120,7 +153,7 @@ class CHPScraper extends BaseScraper {
       if (product.id && product.id !== 'prev' && product.id !== 'next') {
         try {
           const fullDetails = await Promise.race([
-            this.getProductDetails(product.id, barcode.trim()),
+            this.getProductDetails(product.id, barcode.trim(), locationOptions),
             new Promise((_, reject) => 
               setTimeout(() => reject(new Error('Timeout')), 8000) // 8 second max wait
             ),
@@ -136,8 +169,13 @@ class CHPScraper extends BaseScraper {
       return basicProduct;
     } catch (error) {
       console.error(`[CHP] Barcode search error: ${error.message}`);
+      console.error(`[CHP] Error details:`, {
+        code: error.code,
+        city: locationOptions.city,
+        barcode: barcode.trim(),
+      });
       if (error.code === 'ECONNABORTED') {
-        console.log(`[CHP] Request timed out for barcode: ${barcode.trim()}`);
+        console.log(`[CHP] Request timed out for barcode: ${barcode.trim()} with city: ${locationOptions.city || 'none'}`);
       }
       return null;
     }
@@ -183,18 +221,27 @@ class CHPScraper extends BaseScraper {
    * Get full product details with prices from all stores
    * @param {string} productId - Product ID (format: store_code_barcode)
    * @param {string} barcode - Product barcode
+   * @param {Object} locationOptions - Location options for physical store prices
    * @returns {Promise<Object|null>} Product with prices from multiple stores
    */
-  async getProductDetails(productId, barcode) {
+  async getProductDetails(productId, barcode, locationOptions = {}) {
     try {
+      const {
+        city = '',
+        street = '',
+        cityId = 0,
+        streetId = 0,
+      } = locationOptions;
+      
       // Get price comparison page (this is slower, so we limit timeout)
+      // If city is provided, CHP will show prices from physical stores in that city
       const response = await axios.get(`${this.apiBase}${this.compareEndpoint}`, {
         params: {
           product_barcode: productId,
           product_name_or_barcode: '',
-          shopping_address: '',
-          shopping_address_street_id: 0,
-          shopping_address_city_id: 0,
+          shopping_address: city || street || '',
+          shopping_address_street_id: streetId || 0,
+          shopping_address_city_id: cityId || 0,
           from: 0,
           num_results: 50, // Reduced from 100 to speed up
         },
@@ -293,6 +340,7 @@ class CHPScraper extends BaseScraper {
           if (displayName && price !== null) {
             prices.push({
               store: displayName,
+              chain: chainName || '', // Include chain name (e.g., "שופרסל", "רמי לוי")
               price: price,
               currency: 'ILS',
             });
@@ -314,6 +362,9 @@ class CHPScraper extends BaseScraper {
       // and store all prices in a special format
       const sortedPrices = prices.sort((a, b) => a.price - b.price);
       const cheapestPrice = sortedPrices.length > 0 ? sortedPrices[0].price : null;
+      
+      // Limit to top 7 cheapest prices for faster response
+      const topPrices = sortedPrices.slice(0, 7);
 
       return {
         name: productInfo.name,
@@ -329,8 +380,8 @@ class CHPScraper extends BaseScraper {
         discount: null,
         store: 'CHP (Multiple Stores)',
         productUrl: `${this.apiBase}/product/${productId}`,
-        // Store all prices for comparison
-        pricesByStore: prices,
+        // Store top 7 cheapest prices for comparison
+        pricesByStore: topPrices,
         dataSource: 'chp',
       };
     } catch (error) {

@@ -67,6 +67,14 @@ const storeSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // Store type: 'physical' for physical supermarkets, 'online' for online stores
+    storeType: {
+      type: String,
+      enum: ['physical', 'online'],
+      default: 'physical',
+      index: true,
+    },
   },
   {
     timestamps: true,

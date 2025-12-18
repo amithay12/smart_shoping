@@ -4,6 +4,7 @@ const StoreProduct = require('../models/StoreProduct');
 const { lookupBarcode, searchProducts } = require('../services/barcodeService');
 const realPriceDownloader = require('../services/scrapers/realPriceDownloader');
 const scraperManager = require('../services/scrapers/scraperManager');
+const { getCHPLocationOptions } = require('../utils/locationHelper');
 
 /**
  * @desc    Lookup product by barcode and fetch prices from all stores
@@ -13,10 +14,29 @@ const scraperManager = require('../services/scrapers/scraperManager');
 exports.lookupByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
+    // Get location from query params (city name in Hebrew, e.g., "תל אביב", "ירושלים")
+    const { city, street, lat, lng } = req.query;
 
     if (!barcode || barcode.trim().length === 0) {
       return res.status(400).json({ message: 'Barcode is required' });
     }
+
+    // Debug: Log raw query params
+    console.log('Raw query params:', { city, street, lat, lng });
+    console.log('City type:', typeof city, 'City value:', city);
+    console.log('City truthy check:', !!city);
+
+    // Prepare location options for CHP
+    // CHP needs city name in Hebrew to show physical store prices
+    // Convert coordinates to city name if needed
+    const locationOptions = getCHPLocationOptions({ 
+      city: city ? decodeURIComponent(city) : null, 
+      street: street ? decodeURIComponent(street) : null, 
+      lat: lat ? parseFloat(lat) : null, 
+      lng: lng ? parseFloat(lng) : null 
+    });
+    console.log('Location options for CHP after function call:', locationOptions);
+    console.log('Location options city:', locationOptions.city);
 
     // First, lookup product from database or external APIs
     const result = await lookupBarcode(barcode.trim());
@@ -73,6 +93,7 @@ exports.lookupByBarcode = async (req, res) => {
                 _id: sp.store._id,
                 name: sp.store.name,
                 chain: sp.store.chain,
+                storeType: sp.store.storeType || 'physical',
               },
               price: sp.price,
               currency: sp.currency || 'ILS',
@@ -81,39 +102,74 @@ exports.lookupByBarcode = async (req, res) => {
       }
     }
 
-    // If no prices found in database, try to fetch from CHP first (aggregates multiple stores)
+    // Primary source: CHP (includes both online and physical store prices)
+    // CHP aggregates prices from multiple Israeli supermarkets (both online and physical)
+    // If city is provided, CHP will show prices from physical stores in that city
+    let chpFoundPrices = false;
+    
     if (pricesByStore.length === 0) {
       try {
-        console.log(`Fetching prices from CHP for barcode ${barcode.trim()}...`);
+        const locationInfo = locationOptions.city 
+          ? ` (city: ${locationOptions.city})` 
+          : locationOptions.street 
+          ? ` (street: ${locationOptions.street})`
+          : ' (online stores)';
+        console.log(`Fetching prices from CHP for barcode ${barcode.trim()}${locationInfo}...`);
+        console.log(`CHP locationOptions being sent:`, JSON.stringify(locationOptions));
         const chpScraper = scraperManager.scrapers['CHP'];
         if (chpScraper) {
           // Add timeout wrapper to prevent hanging
+          console.log(`[CHP] Starting search with locationOptions:`, locationOptions);
           const chpResult = await Promise.race([
-            chpScraper.searchByBarcode(barcode.trim()),
+            chpScraper.searchByBarcode(barcode.trim(), locationOptions),
             new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('CHP search timeout')), 10000) // 10 second max
+              setTimeout(() => reject(new Error('CHP search timeout')), 15000) // Increased to 15 seconds for city searches
             ),
           ]).catch(error => {
-            console.log(`[CHP] Search failed or timed out: ${error.message}`);
+            console.error(`[CHP] Search failed or timed out: ${error.message}`);
+            console.error(`[CHP] Error stack:`, error.stack);
             return null;
           });
           
+          console.log(`[CHP] Search result:`, chpResult ? `Found ${chpResult.pricesByStore?.length || 0} prices` : 'No result');
+          
           if (chpResult) {
-            // CHP returns prices from multiple stores
+            // CHP returns prices from multiple stores (both online and physical)
             if (chpResult.pricesByStore && Array.isArray(chpResult.pricesByStore) && chpResult.pricesByStore.length > 0) {
+              chpFoundPrices = true;
               
               // Save each price from CHP
+              console.log(`[CHP] Processing ${chpResult.pricesByStore.length} prices`);
               for (const priceInfo of chpResult.pricesByStore) {
-                // Find or create store
-                let store = await Store.findOne({ chain: priceInfo.store });
+                // Determine store type: if city is provided, it's likely a physical store
+                // Otherwise, it's likely an online store
+                const storeType = locationOptions.city ? 'physical' : 'online';
+                // Use chain from priceInfo if available, otherwise use store name
+                const chainName = priceInfo.chain || priceInfo.store;
+                console.log(`[CHP] Price from store: "${priceInfo.store}", chain: "${chainName}", setting storeType to: ${storeType}`);
+                
+                // Find or create store by chain name (more reliable than store name)
+                let store = await Store.findOne({ chain: chainName });
                 if (!store) {
                   store = await Store.create({
-                    name: priceInfo.store,
-                    chain: priceInfo.store,
+                    name: priceInfo.store, // Store location name (e.g., "רמת החייל")
+                    chain: chainName, // Chain name (e.g., "שופרסל", "רמי לוי")
                     address: { fullAddress: 'Israel' },
                     location: { type: 'Point', coordinates: [34.7818, 32.0853] },
                     isActive: true,
+                    storeType: storeType,
                   });
+                } else {
+                  // Update store name if it's different (location might be different)
+                  if (store.name !== priceInfo.store) {
+                    store.name = priceInfo.store;
+                  }
+                  // Always update store type based on current search (city provided = physical)
+                  // This ensures stores are correctly categorized for each search
+                  if (store.storeType !== storeType) {
+                    store.storeType = storeType;
+                  }
+                  await store.save();
                 }
 
                 // Ensure product exists
@@ -153,14 +209,21 @@ exports.lookupByBarcode = async (req, res) => {
                     { upsert: true, new: true }
                   );
 
+                  const finalStoreType = store.storeType || storeType;
+                  console.log(`[CHP] Adding price to response - Store: ${store.name}, Type: ${finalStoreType}, Price: ${priceInfo.price}`);
+                  // Use chain from priceInfo if available (from CHP), otherwise use store.chain
+                  const displayChain = priceInfo.chain || store.chain || '';
+                  
                   pricesByStore.push({
                     store: {
                       _id: store._id,
                       name: store.name,
-                      chain: store.chain,
+                      chain: displayChain, // Use chain from CHP (e.g., "שופרסל", "רמי לוי")
+                      storeType: finalStoreType,
                     },
                     price: priceInfo.price,
                     currency: priceInfo.currency || 'ILS',
+                    source: 'chp', // All prices from CHP
                   });
                 }
               }
@@ -185,14 +248,14 @@ exports.lookupByBarcode = async (req, res) => {
         }
       } catch (error) {
         console.error(`[CHP] Error fetching prices: ${error.message}`);
-        // Continue to next method (government files)
       }
     }
 
-    // If still no prices found, try to fetch from government files
-    if (pricesByStore.length === 0) {
+    // Fallback: Only use government files if CHP didn't find prices
+    // Government files provide physical store prices as backup
+    if (!chpFoundPrices && pricesByStore.length === 0) {
       try {
-        console.log(`Fetching prices for barcode ${barcode.trim()}...`);
+        console.log(`CHP didn't find prices, trying government files for barcode ${barcode.trim()}...`);
         
         // Search in each supermarket's price files
         for (const supermarketName of ['Shufersal', 'Rami Levy', 'Yohananof']) {
@@ -287,6 +350,7 @@ exports.lookupByBarcode = async (req, res) => {
                   },
                   price: foundProduct.price,
                   currency: 'ILS',
+                  source: 'government', // Mark as from government files (fallback)
                 });
               }
             }
@@ -296,9 +360,13 @@ exports.lookupByBarcode = async (req, res) => {
           }
         }
       } catch (error) {
-        console.error('Error fetching real prices:', error.message);
+        console.error('Error fetching prices from government files:', error.message);
       }
     }
+
+    // Sort by price (cheapest first) and limit to top 7
+    pricesByStore.sort((a, b) => a.price - b.price);
+    pricesByStore = pricesByStore.slice(0, 7); // Limit to top 7 cheapest prices
 
     // Make sure we have a product to return
     if (!product && result.product) {
@@ -306,11 +374,16 @@ exports.lookupByBarcode = async (req, res) => {
       product = result.product;
     }
 
+    console.log(`[RESPONSE] Returning ${pricesByStore.length} prices:`);
+    pricesByStore.forEach((p, idx) => {
+      console.log(`  ${idx + 1}. ${p.store.name || p.store.chain} - Type: ${p.store.storeType || 'unknown'} - Price: ₪${p.price}`);
+    });
+
     res.status(200).json({
       success: true,
       product: product ? (product.toObject ? product.toObject() : product) : result.product,
       source: result.source,
-      prices: pricesByStore, // Prices from all stores
+      prices: pricesByStore, // Prices from all stores (online + physical)
     });
   } catch (error) {
     console.error('Error in lookupByBarcode:', error);
@@ -364,7 +437,7 @@ exports.getProduct = async (req, res) => {
       product: productId,
       isAvailable: true,
     })
-      .populate('store', 'name chain')
+      .populate('store', 'name chain storeType')
       .sort({ price: 1 }); // Sort by price ascending
 
     const prices = storeProducts.map(sp => ({
@@ -372,6 +445,7 @@ exports.getProduct = async (req, res) => {
         _id: sp.store._id,
         name: sp.store.name,
         chain: sp.store.chain,
+        storeType: sp.store.storeType || 'physical',
       },
       price: sp.price,
       currency: sp.currency,
