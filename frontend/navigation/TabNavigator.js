@@ -7,6 +7,7 @@ import ShoppingListScreen from '../screens/ShoppingListScreen';
 import HouseholdScreen from '../screens/HouseholdScreen';
 import HistoryScreen from '../screens/HistoryScreen';
 import RecommendationsScreen from '../screens/RecommendationsScreen';
+import StoreComparisonScreen from '../screens/StoreComparisonScreen';
 
 // צבעי המותג שלנו
 const COLORS = {
@@ -42,6 +43,8 @@ export default function TabNavigator() {
             iconName = focused ? 'time' : 'time-outline';
           } else if (route.name === 'Recommendations') {
             iconName = focused ? 'bulb' : 'bulb-outline';
+          } else if (route.name === 'Compare') {
+            iconName = focused ? 'storefront' : 'storefront-outline';
           }
 
           // החזרת רכיב האייקון
@@ -69,6 +72,11 @@ export default function TabNavigator() {
         name="Recommendations" 
         component={RecommendationsScreen} 
         options={{ title: 'Recommendations' }} 
+      />
+      <Tab.Screen 
+        name="Compare" 
+        component={StoreComparisonScreen} 
+        options={{ title: 'Compare Prices' }} 
       />
     </Tab.Navigator>
   );

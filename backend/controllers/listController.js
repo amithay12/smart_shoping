@@ -25,7 +25,7 @@ exports.getShoppingList = async (req, res) => {
 // Add item (no change)
 exports.addItem = async (req, res) => {
   try {
-    const { name, quantity } = req.body;
+    const { name, quantity, productId, barcode } = req.body;
     
     // Basic input validation
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -44,6 +44,14 @@ exports.addItem = async (req, res) => {
       addedBy: userId,
       isPurchased: false,
     };
+
+    // Link to product if provided (for price comparison)
+    if (productId) {
+      newItem.product = productId;
+    }
+    if (barcode) {
+      newItem.barcode = barcode;
+    }
     const updatedList = await ShoppingList.findOneAndUpdate(
       { household: householdId },
       { $push: { items: newItem } },

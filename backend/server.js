@@ -51,6 +51,18 @@ app.use('/api/household', require('./routes/household'));
 // Recommendations route for smart shopping suggestions
 app.use('/api/recommendations', require('./routes/recommendations'));
 
+// Product routes (barcode lookup, product search)
+app.use('/api/products', require('./routes/products'));
+
+// Store routes (store management, price comparison)
+app.use('/api/stores', require('./routes/stores'));
+
+// Basket optimization routes
+app.use('/api/basket', require('./routes/basket'));
+
+// Scraper routes (for real-time price updates from supermarket websites)
+app.use('/api/scraper', require('./routes/scraper'));
+
 // --- End of Routes ---
 
 const PORT = process.env.PORT || 5000;

@@ -11,11 +11,15 @@
   "author": "Amit Hayot",
   "license": "ISC",
   "dependencies": {
+    "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.1",
-    "mongoose": "^8.4.1"
+    "mongoose": "^8.4.1",
+    "puppeteer": "^24.32.1",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.2"

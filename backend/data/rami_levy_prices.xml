@@ -1,0 +1,44 @@
+<Root>
+  <XmlDocVersion>19</XmlDocVersion>
+  <ChainId>7290058140886</ChainId>
+  <SubChainId>1</SubChainId>
+  <StoreId>011</StoreId>
+  <BikoretNo>3</BikoretNo>
+  <DllVerNo>9.4.0.50</DllVerNo>
+  <Items Count="224">
+    <Item>
+      <PriceUpdateDate>2024-12-02 18:15:07</PriceUpdateDate>
+      <ItemCode>4022025001752</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemName>בלו נאן כשר מבעבע חצ</ItemName>
+      <ManufacturerName>לא ידוע</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>בלו נאן כשר מבעבע חצ</ManufacturerItemDescription>
+      <UnitQty>מטרים</UnitQty>
+      <Quantity>750.00</Quantity>
+      <UnitOfMeasure>100 מ'ל</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>לא ידוע</QtyInPackage>
+      <ItemPrice>49.90</ItemPrice>
+      <UnitOfMeasurePrice>0.0665</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+      <ItemId>6820256</ItemId>
+    </Item>
+    <!-- Note: This file contains only a sample. The full file has 224 items. -->
+    <!-- To import all items, paste the complete XML content here -->
+  </Items>
+</Root>
+
+
+
+
+
+
+
+
+
+
+
+
+
