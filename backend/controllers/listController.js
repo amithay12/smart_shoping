@@ -64,6 +64,8 @@ exports.addItem = async (req, res) => {
       itemDetails: {
         name: newItem.name,
         quantity: newItem.quantity,
+        product: newItem.product || null,
+        barcode: newItem.barcode || null,
       },
     });
     const populatedList = await updatedList.populate('items.addedBy', 'displayName email');
@@ -134,6 +136,8 @@ exports.updateItem = async (req, res) => {
       itemDetails: {
         name: item.name,
         quantity: item.quantity,
+        product: item.product || null, // Store product reference if available
+        barcode: item.barcode || null, // Store barcode if available
       },
       previousState: previousState,
     });

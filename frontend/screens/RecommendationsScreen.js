@@ -85,9 +85,15 @@ export default function RecommendationsScreen() {
   const handleAddToList = async (item) => {
     setAddingItemId(item.name);
     try {
+      // Send productId and barcode if available for proper product linking
       await axios.post(
         `${API_URL}/api/list/item`,
-        { name: item.name, quantity: item.quantity || '1' },
+        {
+          name: item.name,
+          quantity: item.quantity || '1',
+          productId: item.productId || null,
+          barcode: item.barcode || null,
+        },
         { headers: { Authorization: `Bearer ${userToken}` } }
       );
       // Optimistically remove it locally
@@ -120,6 +126,9 @@ export default function RecommendationsScreen() {
     <View style={styles.recommendationCard}>
       <View style={styles.itemInfo}>
         <Text style={styles.itemName}>{item.name}</Text>
+        {item.brand && (
+          <Text style={styles.brandText}>{item.brand}</Text>
+        )}
         <View style={styles.metaContainer}>
           <Text style={styles.metaText}>
             Purchased {item.purchaseCount} time{item.purchaseCount > 1 ? 's' : ''}
@@ -132,6 +141,7 @@ export default function RecommendationsScreen() {
         <Text style={styles.lastPurchaseText}>
           Last purchased: {formatDate(item.lastPurchaseDate)}
         </Text>
+        <Text style={styles.reasonText}>{item.reason}</Text>
         {item.quantity && item.quantity !== '1' && (
           <Text style={styles.quantityText}>Quantity: {item.quantity}</Text>
         )}
@@ -222,10 +232,12 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   itemInfo: { flex: 1, marginRight: 12 },
-  itemName: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 8 },
+  itemName: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 4 },
+  brandText: { fontSize: 14, color: '#888', marginBottom: 6, fontStyle: 'italic' },
   metaContainer: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 },
   metaText: { fontSize: 13, color: '#666', marginRight: 6 },
   lastPurchaseText: { fontSize: 12, color: '#999', marginTop: 4 },
+  reasonText: { fontSize: 13, color: '#007bff', fontWeight: '500', marginTop: 4 },
   quantityText: { fontSize: 13, color: '#28a745', fontWeight: '500', marginTop: 4 },
   addButton: {
     backgroundColor: '#28a745',
