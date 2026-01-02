@@ -146,30 +146,31 @@ exports.lookupByBarcode = async (req, res) => {
                 const storeType = locationOptions.city ? 'physical' : 'online';
                 // Use chain from priceInfo if available, otherwise use store name
                 const chainName = priceInfo.chain || priceInfo.store;
-                console.log(`[CHP] Price from store: "${priceInfo.store}", chain: "${chainName}", setting storeType to: ${storeType}`);
+                const storeName = priceInfo.store || chainName;
+                console.log(`[CHP] Price from store: "${storeName}", chain: "${chainName}", setting storeType to: ${storeType}`);
                 
-                // Find or create store by chain name (more reliable than store name)
-                let store = await Store.findOne({ chain: chainName });
+                // IMPORTANT: Create separate Store entries for each unique store name + chain combination
+                // This allows multiple locations of the same chain to have separate StoreProduct entries
+                // For physical stores, store name often differs by location (e.g., "נס ציונה" vs "ברקת סיטי נס ציונה")
+                // For online stores, we still use chain + name to ensure uniqueness
+                let store = await Store.findOne({ 
+                  chain: chainName,
+                  name: storeName,
+                  storeType: storeType
+                });
+                
                 if (!store) {
                   store = await Store.create({
-                    name: priceInfo.store, // Store location name (e.g., "רמת החייל")
-                    chain: chainName, // Chain name (e.g., "שופרסל", "רמי לוי")
-                    address: { fullAddress: 'Israel' },
+                    name: storeName, // Store location/name (e.g., "נס ציונה", "רמי לוי באינטרנט")
+                    chain: chainName, // Chain name (e.g., "סופר ברקת", "רמי לוי")
+                    address: { fullAddress: locationOptions.city ? locationOptions.city : 'Israel' },
                     location: { type: 'Point', coordinates: [34.7818, 32.0853] },
                     isActive: true,
                     storeType: storeType,
                   });
+                  console.log(`[CHP] Created new store: ${storeName} (${chainName})`);
                 } else {
-                  // Update store name if it's different (location might be different)
-                  if (store.name !== priceInfo.store) {
-                    store.name = priceInfo.store;
-                  }
-                  // Always update store type based on current search (city provided = physical)
-                  // This ensures stores are correctly categorized for each search
-                  if (store.storeType !== storeType) {
-                    store.storeType = storeType;
-                  }
-                  await store.save();
+                  console.log(`[CHP] Using existing store: ${storeName} (${chainName})`);
                 }
 
                 // Ensure product exists
