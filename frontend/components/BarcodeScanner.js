@@ -9,9 +9,14 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+
+// Camera barcode scanning temporarily disabled due to build compatibility issues
+// Manual input works perfectly - users can enter barcodes manually
+const BarCodeScanner = null;
 
 // Conditionally import expo-location (optional - requires native module)
 let Location = null;
@@ -23,9 +28,6 @@ try {
 
 const API_URL = 'http://10.0.2.2:5001';
 
-// Manual input only - camera scanning disabled due to build issues
-const isNativeModuleAvailable = false;
-
 export default function BarcodeScanner({ visible, onClose, onProductFound, userToken }) {
   const [hasPermission, setHasPermission] = useState(null);
   const [scanned, setScanned] = useState(false);
@@ -33,23 +35,42 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [showManualInput, setShowManualInput] = useState(false);
   const [city, setCity] = useState('');
+  const [foundProduct, setFoundProduct] = useState(null);
 
   useEffect(() => {
     if (visible) {
-      if (isNativeModuleAvailable) {
-        requestCameraPermission();
-      } else {
-        // If native module not available, show manual input directly
-        setHasPermission(false);
-        setShowManualInput(true);
-      }
+      requestCameraPermission();
       setScanned(false);
       setManualBarcode('');
       setCity('');
     }
   }, [visible]);
 
-  // Camera scanning disabled - manual input only
+  const requestCameraPermission = async () => {
+    if (!BarCodeScanner) {
+      setHasPermission(false);
+      setShowManualInput(true);
+      return;
+    }
+    try {
+      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+      if (status !== 'granted') {
+        setShowManualInput(true);
+      }
+    } catch (error) {
+      console.log('Camera permission error:', error);
+      setHasPermission(false);
+      setShowManualInput(true);
+    }
+  };
+
+  const handleBarCodeScanned = ({ type, data }) => {
+    if (!scanned) {
+      setScanned(true);
+      lookupProduct(data);
+    }
+  };
 
   const handleManualSubmit = async () => {
     if (!manualBarcode.trim()) {
@@ -99,52 +120,12 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
         const product = response.data.product;
         const prices = response.data.prices || [];
         
-        // Build price message
-        let priceMessage = '';
-        if (prices.length > 0) {
-          priceMessage = '\n\n💰 Prices:\n';
-          prices.forEach((p, idx) => {
-            const price = p.price || p.store?.price || 0;
-            const chain = p.store?.chain || '';
-            const storeName = p.store?.name || 'Unknown Store';
-            // Format: "Store Name (Chain)" or just "Store Name" if no chain
-            const displayName = chain && chain !== storeName 
-              ? `${storeName} (${chain})` 
-              : storeName;
-            if (price > 0) {
-              priceMessage += `${displayName}: ₪${price.toFixed(2)}\n`;
-            }
-          });
-        } else {
-          priceMessage = '\n\n⚠️ Prices not available yet';
-        }
-        
-        Alert.alert(
-          'Product Found!',
-          `${product.name}\n${product.brand || ''}${priceMessage}`,
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-              onPress: () => {
-                setScanned(false);
-                setIsLookingUp(false);
-              },
-            },
-            {
-              text: 'Add to List',
-              onPress: () => {
-                if (onProductFound) {
-                  onProductFound({
-                    ...product,
-                    prices: prices, // Include prices
-                  });
-                }
-                handleClose();
-              },
-            },
-          ]
-        );
+        // Store product to show in custom modal with image
+        setFoundProduct({
+          ...product,
+          prices: prices,
+        });
+        setIsLookingUp(false);
       } else {
         Alert.alert(
           'Product Not Found',
@@ -203,8 +184,103 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
 
   if (!visible) return null;
 
-  // If native module not available, show manual input with info
-  if (!isNativeModuleAvailable) {
+  // Show product result modal if product found
+  if (foundProduct) {
+    return (
+      <Modal visible={visible} animationType="slide" transparent={false}>
+        <View style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Product Found!</Text>
+            <TouchableOpacity onPress={() => {
+              setFoundProduct(null);
+              setScanned(false);
+            }}>
+              <Ionicons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.scrollContent} contentContainerStyle={styles.productContent}>
+            {/* Product Image */}
+            {foundProduct.images && foundProduct.images.length > 0 && foundProduct.images[0] ? (
+              <Image 
+                source={{ uri: foundProduct.images[0] }} 
+                style={styles.productImage}
+                resizeMode="contain"
+              />
+            ) : foundProduct.imageUrl ? (
+              <Image 
+                source={{ uri: foundProduct.imageUrl }} 
+                style={styles.productImage}
+                resizeMode="contain"
+              />
+            ) : (
+              <View style={styles.placeholderImage}>
+                <Ionicons name="image-outline" size={64} color="#ccc" />
+              </View>
+            )}
+            
+            {/* Product Info */}
+            <Text style={styles.productName}>{foundProduct.name}</Text>
+            {foundProduct.brand && (
+              <Text style={styles.productBrand}>{foundProduct.brand}</Text>
+            )}
+            
+            {/* Prices */}
+            {foundProduct.prices && foundProduct.prices.length > 0 ? (
+              <View style={styles.pricesContainer}>
+                <Text style={styles.pricesTitle}>💰 Prices:</Text>
+                {foundProduct.prices.map((p, idx) => {
+                  const price = p.price || p.store?.price || 0;
+                  const chain = p.store?.chain || '';
+                  const storeName = p.store?.name || 'Unknown Store';
+                  const displayName = chain && chain !== storeName 
+                    ? `${storeName} (${chain})` 
+                    : storeName;
+                  if (price > 0) {
+                    return (
+                      <View key={idx} style={styles.priceRow}>
+                        <Text style={styles.priceStore}>{displayName}</Text>
+                        <Text style={styles.priceValue}>₪{price.toFixed(2)}</Text>
+                      </View>
+                    );
+                  }
+                  return null;
+                })}
+              </View>
+            ) : (
+              <Text style={styles.noPrices}>⚠️ Prices not available yet</Text>
+            )}
+            
+            {/* Action Buttons */}
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={[styles.button, styles.cancelButton]}
+                onPress={() => {
+                  setFoundProduct(null);
+                  setScanned(false);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.submitButton]}
+                onPress={() => {
+                  if (onProductFound) {
+                    onProductFound(foundProduct);
+                  }
+                  handleClose();
+                }}
+              >
+                <Text style={styles.submitButtonText}>Add to List</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+    );
+  }
+
+  // If camera permission not granted, show manual input
+  if (hasPermission === false || showManualInput) {
     return (
       <Modal visible={visible} animationType="slide" transparent={false}>
         <View style={styles.container}>
@@ -220,9 +296,9 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
             keyboardShouldPersistTaps="handled"
           >
             <Ionicons name="barcode-outline" size={64} color="#28a745" style={styles.icon} />
-            <Text style={styles.message}>Camera scanning requires a development build</Text>
+            <Text style={styles.message}>Enter Barcode Manually</Text>
             <Text style={styles.subMessage}>
-              Please enter the barcode manually, or build a development build to enable camera scanning.
+              Or grant camera permission to scan barcodes with your camera.
             </Text>
             <TextInput
               style={styles.barcodeInput}
@@ -414,7 +490,49 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
     );
   }
 
-  // Camera scanning disabled - manual input only
+  // Show camera scanner when permission is granted and module is available
+  if (hasPermission === true && BarCodeScanner) {
+    return (
+      <Modal visible={visible} animationType="slide" transparent={false}>
+        <View style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Scan Barcode</Text>
+            <TouchableOpacity onPress={handleClose}>
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          <BarCodeScanner
+            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+            style={styles.camera}
+          />
+          <View style={styles.overlay}>
+            <View style={styles.scanArea}>
+              <View style={[styles.corner, styles.topLeft]} />
+              <View style={[styles.corner, styles.topRight]} />
+              <View style={[styles.corner, styles.bottomLeft]} />
+              <View style={[styles.corner, styles.bottomRight]} />
+            </View>
+            <Text style={styles.instruction}>
+              Point your camera at a barcode
+            </Text>
+            {isLookingUp && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#fff" />
+                <Text style={styles.loadingText}>Looking up product...</Text>
+              </View>
+            )}
+            <TouchableOpacity
+              style={styles.manualButton}
+              onPress={() => setShowManualInput(true)}
+            >
+              <Ionicons name="keyboard-outline" size={20} color="#fff" />
+              <Text style={styles.manualButtonText}>Enter Manually</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   // Fallback to manual input
   return (
@@ -685,5 +803,121 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     marginBottom: 30,
+  },
+  camera: {
+    flex: 1,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  scanArea: {
+    width: 250,
+    height: 250,
+    position: 'relative',
+  },
+  corner: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderColor: '#28a745',
+    borderWidth: 3,
+  },
+  topLeft: {
+    top: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  topRight: {
+    top: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+  },
+  bottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+  },
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: '60%',
+    alignItems: 'center',
+  },
+  productContent: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  productImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 12,
+    marginBottom: 20,
+    backgroundColor: '#f5f5f5',
+  },
+  placeholderImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 12,
+    marginBottom: 20,
+    backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  productName: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  productBrand: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  pricesContainer: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  pricesTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  priceStore: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
+  },
+  priceValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#28a745',
+  },
+  noPrices: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 20,
   },
 });

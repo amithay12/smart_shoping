@@ -37,6 +37,13 @@ const changeHistorySchema = new mongoose.Schema(
     itemDetails: {
       name: String,
       quantity: String,
+      // Product reference for recommendation system
+      product: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Product',
+      },
+      // Barcode for product matching
+      barcode: String,
     },
 
     // This is for the "UNDO" feature. We can store the *previous* state.

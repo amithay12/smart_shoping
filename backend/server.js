@@ -27,6 +27,20 @@ try {
 // Connect to Database
 connectDB();
 
+// Initialize price update job (runs once per day)
+// Only start if not in test mode
+if (process.env.NODE_ENV !== 'test') {
+  const priceUpdateJob = require('./services/priceUpdateJob');
+  // Start scheduled updates (runs once per day, starting after 1 hour)
+  // This gives the server time to fully start before running the first update
+  setTimeout(() => {
+    priceUpdateJob.startScheduledUpdates({
+      intervalMs: 24 * 60 * 60 * 1000, // 24 hours
+      runImmediately: false, // Don't run immediately, wait for first scheduled time
+    });
+  }, 60 * 60 * 1000); // Wait 1 hour before starting
+}
+
 const app = express();
 
 // Body Parser Middleware (allows us to accept JSON data)

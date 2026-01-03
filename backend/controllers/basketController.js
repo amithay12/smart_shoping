@@ -38,33 +38,7 @@ exports.optimizeBasket = async (req, res) => {
       });
     }
 
-    // Get nearby stores - show all active stores, prices will be shown where available
-    let stores = [];
-    if (lat && lng) {
-      const coordinates = [parseFloat(lng), parseFloat(lat)];
-      const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
-
-      stores = await Store.find({
-        isActive: true,
-        location: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates: coordinates,
-            },
-            $maxDistance: distance,
-          },
-        },
-      }).limit(20);
-    } else {
-      stores = await Store.find({ isActive: true }).limit(20);
-    }
-
-    if (stores.length === 0) {
-      return res.status(404).json({ message: 'No stores found nearby' });
-    }
-
-    // Get product IDs from shopping list
+    // Get product IDs from shopping list first
     const productIds = unpurchasedItems
       .map(item => item.product)
       .filter(Boolean); // Remove null/undefined
@@ -75,10 +49,67 @@ exports.optimizeBasket = async (req, res) => {
       });
     }
 
+    // First, find all stores that have prices for these products
+    // This ensures we show all stores where products are available, not just nearby stores
+    const storesWithPrices = await StoreProduct.find({
+      product: { $in: productIds },
+      isAvailable: true,
+      inStock: true,
+    }).distinct('store');
+
+    // Get all stores (prioritize stores with prices, then add nearby stores if location provided)
+    let stores = [];
+    
+    if (storesWithPrices.length > 0) {
+      // Get all stores that have prices for these products
+      stores = await Store.find({
+        _id: { $in: storesWithPrices },
+        isActive: true,
+      });
+    }
+
+    // If location is provided, also include nearby stores (they might have prices we haven't loaded yet)
+    if (lat && lng) {
+      const coordinates = [parseFloat(lng), parseFloat(lat)];
+      const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
+
+      const nearbyStores = await Store.find({
+        isActive: true,
+        location: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: coordinates,
+            },
+            $maxDistance: distance,
+          },
+        },
+      }).limit(50); // Increased limit
+
+      // Merge stores (avoid duplicates)
+      const existingStoreIds = new Set(stores.map(s => s._id.toString()));
+      for (const nearbyStore of nearbyStores) {
+        if (!existingStoreIds.has(nearbyStore._id.toString())) {
+          stores.push(nearbyStore);
+        }
+      }
+    }
+
+    // If no stores found yet, get all active stores as fallback
+    if (stores.length === 0) {
+      stores = await Store.find({ isActive: true }).limit(100); // Increased limit
+    }
+
+    if (stores.length === 0) {
+      return res.status(404).json({ message: 'No stores found' });
+    }
+
+    const allStoreIds = stores.map(s => s._id);
+
     // Get all prices for these products at these stores
     const storeProducts = await StoreProduct.find({
       product: { $in: productIds },
-      store: { $in: stores.map(s => s._id) },
+      store: { $in: allStoreIds },
       isAvailable: true,
       inStock: true,
     })
@@ -87,6 +118,7 @@ exports.optimizeBasket = async (req, res) => {
 
     // Build price map: productId -> storeId -> price
     const priceMap = {};
+    
     storeProducts.forEach(sp => {
       const productId = sp.product._id.toString();
       const storeId = sp.store._id.toString();
@@ -95,6 +127,7 @@ exports.optimizeBasket = async (req, res) => {
         priceMap[productId] = {};
       }
 
+      // Map by store ID (each store gets its own entry)
       priceMap[productId][storeId] = {
         price: sp.price,
         currency: sp.currency,
@@ -225,4 +258,5 @@ exports.optimizeBasket = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
 
