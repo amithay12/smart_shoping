@@ -171,12 +171,13 @@ async function lookupBarcodeFallback(barcode) {
 
 /**
  * Search products by name
- * Searches database first, then external APIs (CHP), and saves new products
+ * Searches ONLY through CHP to get comprehensive product coverage from all stores
  * @param {string} query - Search query
  * @param {number} limit - Maximum results
+ * @param {Object} locationOptions - Location options for fetching prices (city, lat, lng)
  * @returns {Promise<Object>} Search results with products array
  */
-async function searchProducts(query, limit = 20) {
+async function searchProducts(query, limit = 20, locationOptions = {}) {
   try {
     // Clear expired cache entries
     clearExpiredCache();
@@ -195,79 +196,41 @@ async function searchProducts(query, limit = 20) {
       };
     }
 
-    // Step 1: Search in database first
-    const dbProducts = await Product.find({
-      $or: [
-        { name: { $regex: query, $options: 'i' } },
-        { brand: { $regex: query, $options: 'i' } },
-        { category: { $regex: query, $options: 'i' } },
-      ],
-    })
-      .limit(limit)
-      .sort({ name: 1 });
+    // Search ONLY through CHP for comprehensive coverage from all stores
+    const resultProducts = [];
+    const dbBarcodes = new Set();
 
-    const resultProducts = dbProducts.map(p => p.toObject());
-    const dbBarcodes = new Set(dbProducts.map(p => p.barcode).filter(Boolean));
+    try {
+      console.log(`[Search] Searching CHP for query: ${query}`);
+      const chpScraper = scraperManager.scrapers['CHP'];
+      if (chpScraper) {
+        const chpResults = await chpScraper.searchByName(query);
+        
+        if (chpResults && Array.isArray(chpResults)) {
+          // Process all CHP results and save to database
+          for (const chpProduct of chpResults) {
+            // Only process products with barcodes (CHP products without barcodes can't be saved)
+            if (!chpProduct.barcode) {
+              continue;
+            }
 
-    // Step 2: If we don't have enough results, search external APIs (CHP)
-    if (resultProducts.length < limit) {
-      try {
-        console.log(`[Search] Searching CHP for query: ${query}`);
-        const chpScraper = scraperManager.scrapers['CHP'];
-        if (chpScraper) {
-          const chpResults = await chpScraper.searchByName(query);
-          
-          if (chpResults && Array.isArray(chpResults)) {
-            // Save new products from CHP to database
-            for (const chpProduct of chpResults) {
-              // Skip if we already have this product
-              if (chpProduct.barcode && dbBarcodes.has(chpProduct.barcode)) {
-                continue;
-              }
+            // Skip if we already processed this barcode
+            if (dbBarcodes.has(chpProduct.barcode)) {
+              continue;
+            }
 
-              // Only save if we have a barcode (CHP products may not always have barcodes)
-              if (chpProduct.barcode) {
-                try {
-                  const savedProduct = await Product.findOneAndUpdate(
-                    { barcode: chpProduct.barcode },
-                    {
-                      $setOnInsert: {
-                        barcode: chpProduct.barcode,
-                        name: chpProduct.name || 'Unknown Product',
-                        brand: chpProduct.brand || '',
-                        category: chpProduct.category || '',
-                        imageUrl: chpProduct.imageUrl || '',
-                        unit: chpProduct.unit || '',
-                        size: chpProduct.size || '',
-                        dataSource: 'chp',
-                      },
-                    },
-                    { upsert: true, new: true }
-                  );
+            // Stop if we've reached the limit
+            if (resultProducts.length >= limit) {
+              break;
+            }
 
-                  // Add to results if not already there and we haven't reached the limit
-                  if (resultProducts.length < limit) {
-                    const existsInResults = resultProducts.some(
-                      p => p.barcode === savedProduct.barcode || 
-                      (p.name && savedProduct.name && p.name.toLowerCase() === savedProduct.name.toLowerCase())
-                    );
-                    if (!existsInResults) {
-                      resultProducts.push(savedProduct.toObject());
-                      dbBarcodes.add(savedProduct.barcode);
-                    }
-                  }
-                } catch (error) {
-                  console.error(`Error saving product from CHP to database: ${error.message}`);
-                  // Continue with other products even if one fails
-                }
-              } else if (resultProducts.length < limit) {
-                // If no barcode, still try to add if we don't have a duplicate by name
-                const existsInResults = resultProducts.some(
-                  p => p.name && chpProduct.name && p.name.toLowerCase() === chpProduct.name.toLowerCase()
-                );
-                if (!existsInResults) {
-                  // Create a temporary product object (won't be saved without barcode)
-                  resultProducts.push({
+            try {
+              // Save product to database (upsert - create if doesn't exist, update if exists)
+              const savedProduct = await Product.findOneAndUpdate(
+                { barcode: chpProduct.barcode },
+                {
+                  $setOnInsert: {
+                    barcode: chpProduct.barcode,
                     name: chpProduct.name || 'Unknown Product',
                     brand: chpProduct.brand || '',
                     category: chpProduct.category || '',
@@ -275,17 +238,58 @@ async function searchProducts(query, limit = 20) {
                     unit: chpProduct.unit || '',
                     size: chpProduct.size || '',
                     dataSource: 'chp',
-                    _temp: true, // Mark as temporary (no barcode)
+                  },
+                },
+                { upsert: true, new: true }
+              );
+
+              // Prepare product object for response
+              const productObj = savedProduct.toObject();
+              
+              // Ensure imageUrl is available (use CHP image if database doesn't have it)
+              if (!productObj.imageUrl && chpProduct.imageUrl) {
+                productObj.imageUrl = chpProduct.imageUrl;
+              }
+              // Handle images array if it exists
+              if (!productObj.imageUrl && productObj.images && productObj.images.length > 0) {
+                productObj.imageUrl = productObj.images[0];
+              }
+
+              resultProducts.push(productObj);
+              dbBarcodes.add(savedProduct.barcode);
+            } catch (error) {
+              console.error(`Error saving product from CHP to database: ${error.message}`);
+              // Even if save fails, still add to results with CHP data (but won't have _id)
+              if (resultProducts.length < limit) {
+                const existsInResults = resultProducts.some(
+                  p => p.barcode === chpProduct.barcode || 
+                  (p.name && chpProduct.name && p.name.toLowerCase() === chpProduct.name.toLowerCase())
+                );
+                if (!existsInResults) {
+                  resultProducts.push({
+                    name: chpProduct.name || 'Unknown Product',
+                    brand: chpProduct.brand || '',
+                    category: chpProduct.category || '',
+                    imageUrl: chpProduct.imageUrl || '',
+                    unit: chpProduct.unit || '',
+                    size: chpProduct.size || '',
+                    barcode: chpProduct.barcode,
+                    dataSource: 'chp',
                   });
+                  dbBarcodes.add(chpProduct.barcode);
                 }
               }
             }
           }
+        } else {
+          console.log(`[Search] CHP returned no results or invalid format for query: ${query}`);
         }
-      } catch (error) {
-        console.error(`[Search] Error searching CHP: ${error.message}`);
-        // Continue with database results even if CHP search fails
+      } else {
+        console.error(`[Search] CHP scraper not available`);
       }
+    } catch (error) {
+      console.error(`[Search] Error searching CHP: ${error.message}`);
+      console.error(`[Search] Error stack:`, error.stack);
     }
 
     // Limit results
@@ -322,4 +326,5 @@ module.exports = {
   lookupBarcode,
   searchProducts,
 };
+
 

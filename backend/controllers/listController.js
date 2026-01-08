@@ -4,7 +4,12 @@
 const ShoppingList = require('../models/ShoppingList');
 const ChangeHistory = require('../models/ChangeHistory');
 const mongoose = require('mongoose');
-const User = require('../models/User'); 
+const User = require('../models/User');
+const Product = require('../models/Product');
+const Store = require('../models/Store');
+const StoreProduct = require('../models/StoreProduct');
+const scraperManager = require('../services/scrapers/scraperManager');
+const { getCHPLocationOptions } = require('../utils/locationHelper'); 
 
 // Get list (no change)
 exports.getShoppingList = async (req, res) => {
@@ -22,10 +27,89 @@ exports.getShoppingList = async (req, res) => {
   }
 };
 
-// Add item (no change)
+// Helper function to fetch prices with location (runs in background)
+async function fetchPricesForProduct(productId, barcode, locationOptions) {
+  // Run in background - don't block the response
+  setImmediate(async () => {
+    try {
+      if (!barcode) return;
+
+      const chpScraper = scraperManager.scrapers['CHP'];
+      if (!chpScraper) return;
+
+      const product = await Product.findById(productId);
+      if (!product) return;
+
+      console.log(`[Background] Fetching prices for product ${product.name} (${barcode}) in city: ${locationOptions.city || 'online'}`);
+
+      // Use the product ID format from CHP (format: store_code_barcode)
+      // For now, just use barcode - CHP will handle the lookup
+      const chpResult = await Promise.race([
+        chpScraper.searchByBarcode(barcode, locationOptions),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('CHP price fetch timeout')), 15000)
+        ),
+      ]).catch(error => {
+        console.error(`[Background] CHP price fetch failed: ${error.message}`);
+        return null;
+      });
+
+      if (chpResult && chpResult.pricesByStore && Array.isArray(chpResult.pricesByStore)) {
+        for (const priceInfo of chpResult.pricesByStore) {
+          const storeType = locationOptions.city ? 'physical' : 'online';
+          const chainName = priceInfo.chain || priceInfo.store;
+          const storeName = priceInfo.store || chainName;
+
+          let store = await Store.findOne({
+            chain: chainName,
+            name: storeName,
+            storeType: storeType
+          });
+
+          if (!store) {
+            store = await Store.create({
+              name: storeName,
+              chain: chainName,
+              address: { fullAddress: locationOptions.city || 'Israel' },
+              location: { type: 'Point', coordinates: [34.7818, 32.0853] },
+              isActive: true,
+              storeType: storeType,
+            });
+          }
+
+          if (product._id && priceInfo.price) {
+            await StoreProduct.findOneAndUpdate(
+              { product: product._id, store: store._id },
+              {
+                price: priceInfo.price,
+                currency: priceInfo.currency || 'ILS',
+                unitPrice: priceInfo.price,
+                isAvailable: true,
+                inStock: true,
+                lastPriceUpdate: new Date(),
+                $push: {
+                  priceHistory: {
+                    price: priceInfo.price,
+                    date: new Date(),
+                  },
+                },
+              },
+              { upsert: true, new: true }
+            );
+          }
+        }
+        console.log(`[Background] Fetched ${chpResult.pricesByStore.length} prices for ${product.name}`);
+      }
+    } catch (error) {
+      console.error(`[Background] Error fetching prices: ${error.message}`);
+    }
+  });
+}
+
+// Add item
 exports.addItem = async (req, res) => {
   try {
-    const { name, quantity, productId, barcode } = req.body;
+    const { name, quantity, productId, barcode, city, lat, lng } = req.body;
     
     // Basic input validation
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -68,6 +152,17 @@ exports.addItem = async (req, res) => {
         barcode: newItem.barcode || null,
       },
     });
+
+    // If product has barcode and location is provided, fetch prices in background
+    if (barcode && productId && (city || lat || lng)) {
+      const locationOptions = getCHPLocationOptions({
+        city: city ? decodeURIComponent(city) : null,
+        lat: lat ? parseFloat(lat) : null,
+        lng: lng ? parseFloat(lng) : null,
+      });
+      fetchPricesForProduct(productId, barcode, locationOptions);
+    }
+
     const populatedList = await updatedList.populate('items.addedBy', 'displayName email');
     res.status(201).json(populatedList);
   } catch (error) {
