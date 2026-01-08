@@ -17,6 +17,7 @@ import { useFocusEffect } from '@react-navigation/native'; // <--- ADDED THIS IM
 import { AuthContext } from '../context/AuthContext';
 import axios from 'axios';
 import BarcodeScanner from '../components/BarcodeScanner';
+import ProductSearch from '../components/ProductSearch';
 
 const API_URL = 'http://10.0.2.2:5001';
 
@@ -27,6 +28,7 @@ export default function ShoppingListScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   // --- CHANGED: Replaced useEffect with useFocusEffect ---
   // This ensures the list refreshes every time you switch back to this tab.
@@ -175,6 +177,12 @@ export default function ShoppingListScreen() {
         <Text style={styles.title}>My Shopping List</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity
+            style={[styles.scanButton, styles.searchButton]}
+            onPress={() => setShowSearch(true)}
+          >
+            <Text style={styles.scanButtonText}>🔍 Search</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={styles.scanButton}
             onPress={() => setShowScanner(true)}
           >
@@ -200,6 +208,35 @@ export default function ShoppingListScreen() {
           }
         />
       )}
+
+      {/* Product Search */}
+      <ProductSearch
+        visible={showSearch}
+        onClose={() => setShowSearch(false)}
+        onProductSelected={async (product, locationParams = {}) => {
+          try {
+            const response = await axios.post(
+              `${API_URL}/api/list/item`,
+              {
+                name: product.name,
+                quantity: '1',
+                productId: product._id || null,
+                barcode: product.barcode || null,
+                city: locationParams.city,
+                lat: locationParams.lat,
+                lng: locationParams.lng,
+              },
+              { headers: { Authorization: `Bearer ${userToken}` } }
+            );
+            setItems(response.data.items);
+            emit('shoppingList:changed');
+            Alert.alert('Success!', `${product.name} added to your list.`);
+          } catch (error) {
+            console.error('Error adding product:', error);
+            Alert.alert('Error', 'Could not add product to list.');
+          }
+        }}
+      />
 
       {/* Barcode Scanner */}
       <BarcodeScanner
@@ -268,6 +305,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
+  },
+  searchButton: {
+    backgroundColor: '#007bff',
   },
   scanButtonText: {
     color: '#fff',

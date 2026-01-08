@@ -394,18 +394,26 @@ exports.lookupByBarcode = async (req, res) => {
 
 /**
  * @desc    Search products by name
- * @route   GET /api/products/search?q=query
+ * @route   GET /api/products/search?q=query&city=city&lat=lat&lng=lng
  * @access  Public
  */
 exports.searchProducts = async (req, res) => {
   try {
-    const { q, limit } = req.query;
+    const { q, limit, city, street, lat, lng } = req.query;
 
     if (!q || q.trim().length === 0) {
       return res.status(400).json({ message: 'Search query is required' });
     }
 
-    const result = await searchProducts(q.trim(), parseInt(limit) || 20);
+    // Prepare location options
+    const locationOptions = getCHPLocationOptions({
+      city: city ? decodeURIComponent(city) : null,
+      street: street ? decodeURIComponent(street) : null,
+      lat: lat ? parseFloat(lat) : null,
+      lng: lng ? parseFloat(lng) : null,
+    });
+
+    const result = await searchProducts(q.trim(), parseInt(limit) || 20, locationOptions);
 
     res.status(200).json({
       success: result.success,
