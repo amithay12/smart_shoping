@@ -61,33 +61,38 @@ export default function HistoryScreen() {
   };
 
   const renderHistoryItem = ({ item }) => {
+    // Get user display name or fallback to email or "Unknown User"
+    const userName = item.user 
+      ? (item.user.displayName || item.user.email || 'Unknown User')
+      : 'Unknown User';
+
     let iconName = 'help';
     let color = '#333';
-    let text = `${item.user.displayName} ${item.action}`; 
+    let text = `${userName} ${item.action}`; 
 
     switch (item.action) {
       case 'ADD_ITEM':
         iconName = 'add-circle';
         color = '#28a745'; // Green
-        text = `${item.user.displayName} added ${item.itemDetails.name}`;
+        text = `${userName} added ${item.itemDetails?.name || 'an item'}`;
         break;
       case 'REMOVE_ITEM':
         iconName = 'remove-circle';
         color = '#dc3545'; // Red
-        text = `${item.user.displayName} removed ${item.itemDetails.name}`;
+        text = `${userName} removed ${item.itemDetails?.name || 'an item'}`;
         break;
       case 'PURCHASE_ITEM':
         iconName = 'checkmark-circle';
         color = '#007bff'; // Blue
-        text = `${item.user.displayName} purchased ${item.itemDetails.name}`;
+        text = `${userName} purchased ${item.itemDetails?.name || 'an item'}`;
         break;
       case 'UNDO_PURCHASE':
         iconName = 'arrow-undo-circle';
         color = '#ffc107'; // Yellow
-        text = `${item.user.displayName} un-purchased ${item.itemDetails.name}`;
+        text = `${userName} un-purchased ${item.itemDetails?.name || 'an item'}`;
         break;
       default:
-        text = `${item.user.displayName} updated ${item.itemDetails.name}`;
+        text = `${userName} updated ${item.itemDetails?.name || 'an item'}`;
     }
 
     return (
