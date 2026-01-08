@@ -6,17 +6,21 @@ import {
   TextInput,
   FlatList,
   TouchableOpacity,
+  Pressable,
   Image,
   ActivityIndicator,
   Modal,
   Keyboard,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 const API_URL = 'http://10.0.2.2:5001';
 
 const DEBOUNCE_DELAY = 300; // milliseconds
+const CITY_STORAGE_KEY = '@smart_shopping:last_city';
 
 // Conditionally import expo-location (optional - requires native module)
 let Location = null;
@@ -27,6 +31,10 @@ try {
 }
 
 export default function ProductSearch({ visible, onClose, onProductSelected }) {
+  // Debug: Log when component receives props
+  useEffect(() => {
+    console.log('ProductSearch - onClose prop:', typeof onClose, !!onClose);
+  }, [onClose]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -36,8 +44,11 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
   const searchTimeoutRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Load saved city when component mounts or modal opens
   useEffect(() => {
     if (visible) {
+      // Load saved city from storage
+      loadSavedCity();
       // Focus input when modal opens
       setTimeout(() => {
         inputRef.current?.focus();
@@ -45,11 +56,11 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
       setSearchQuery('');
       setSearchResults([]);
       setShowResults(false);
-      setCity('');
+      // Don't clear city - keep it persistent
       // Try to get user location
       requestLocationPermission();
     } else {
-      // Clear search when modal closes
+      // Clear search when modal closes (but keep city)
       setSearchQuery('');
       setSearchResults([]);
       setShowResults(false);
@@ -58,6 +69,27 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
       }
     }
   }, [visible]);
+
+  // Load saved city from AsyncStorage
+  const loadSavedCity = async () => {
+    try {
+      const savedCity = await AsyncStorage.getItem(CITY_STORAGE_KEY);
+      if (savedCity) {
+        setCity(savedCity);
+      }
+    } catch (error) {
+      console.log('Error loading saved city:', error.message);
+    }
+  };
+
+  // Save city to AsyncStorage whenever it changes
+  useEffect(() => {
+    if (city && city.trim()) {
+      AsyncStorage.setItem(CITY_STORAGE_KEY, city.trim()).catch(error => {
+        console.log('Error saving city:', error.message);
+      });
+    }
+  }, [city]);
 
   const requestLocationPermission = async () => {
     if (!Location) return;
@@ -101,6 +133,14 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
       return;
     }
 
+    // Don't search if city is not provided (mandatory)
+    if (!city || !city.trim()) {
+      setSearchResults([]);
+      setShowResults(false);
+      setIsSearching(false);
+      return;
+    }
+
     // Debounce search
     setIsSearching(true);
     searchTimeoutRef.current = setTimeout(() => {
@@ -112,17 +152,29 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
         clearTimeout(searchTimeoutRef.current);
       }
     };
-  }, [searchQuery]);
+  }, [searchQuery, city]);
 
   const performSearch = async (query) => {
+    // Validate that city is provided (mandatory)
+    if (!city || !city.trim()) {
+      setIsSearching(false);
+      Alert.alert(
+        'City Required',
+        'Please enter a city name to search for products with local store prices.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     try {
       setIsSearching(true);
       
-      // Build search params with location
-      const params = { q: query, limit: 20 };
-      if (city && city.trim()) {
-        params.city = city.trim();
-      }
+      // Build search params with location (city is now mandatory)
+      const params = { 
+        q: query, 
+        limit: 20,
+        city: city.trim(), // City is always included
+      };
       if (locationParams.lat) {
         params.lat = locationParams.lat;
       }
@@ -216,30 +268,56 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
     );
   };
 
-  // Debug logging
-  useEffect(() => {
-    console.log('ProductSearch visible prop:', visible);
-    console.log('ProductSearch component mounted/updated');
-  }, [visible]);
+  const handleClose = () => {
+    console.log('=== handleClose called ===');
+    Keyboard.dismiss();
+    console.log('onClose type:', typeof onClose, 'value:', !!onClose);
+    if (onClose && typeof onClose === 'function') {
+      console.log('Calling onClose from handleClose');
+      try {
+        onClose();
+        console.log('onClose executed successfully');
+      } catch (error) {
+        console.error('Error calling onClose:', error);
+      }
+    } else {
+      console.error('onClose is not defined or not a function!');
+    }
+  };
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
       transparent={false}
-      onRequestClose={() => {
-        console.log('Modal onRequestClose called');
-        if (onClose) onClose();
-      }}
+      onRequestClose={handleClose}
     >
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-            <Ionicons name="close" size={28} color="#333" />
-          </TouchableOpacity>
+          <Pressable 
+            onPress={() => {
+              console.log('Back button pressed - calling handleClose');
+              handleClose();
+            }}
+            onPressIn={() => {
+              console.log('Back button press started');
+            }}
+            onLongPress={() => {
+              console.log('Back button long press');
+            }}
+            style={({ pressed }) => [
+              styles.backButton,
+              pressed && styles.backButtonPressed
+            ]}
+            hitSlop={{ top: 30, bottom: 30, left: 30, right: 30 }}
+          >
+            <View style={styles.backButtonContent}>
+              <Ionicons name="arrow-back" size={28} color="#333" />
+            </View>
+          </Pressable>
           <Text style={styles.headerTitle}>Search Products</Text>
-          <View style={styles.closeButton} />
+          <View style={styles.backButtonPlaceholder} />
         </View>
 
         {/* Search Input */}
@@ -273,27 +351,51 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
           )}
         </View>
 
-        {/* City Input */}
+        {/* City Input - Mandatory */}
         <View style={styles.cityContainer}>
-          <Ionicons name="location" size={20} color="#666" style={styles.locationIcon} />
+          <Ionicons name="location" size={20} color={city && city.trim() ? "#28a745" : "#dc3545"} style={styles.locationIcon} />
           <TextInput
-            style={styles.cityInput}
-            placeholder="Enter city (e.g., תל אביב, ירושלים) - for local store prices"
+            style={[
+              styles.cityInput,
+              !city || !city.trim() ? styles.cityInputRequired : null
+            ]}
+            placeholder="Enter city (required) - e.g., תל אביב, ירושלים"
             placeholderTextColor="#999"
             value={city}
-            onChangeText={setCity}
+            onChangeText={(text) => {
+              setCity(text);
+              // Save to storage when user types
+              if (text && text.trim()) {
+                AsyncStorage.setItem(CITY_STORAGE_KEY, text.trim()).catch(err => {
+                  console.log('Error saving city:', err.message);
+                });
+              }
+            }}
             autoCapitalize="none"
             autoCorrect={false}
           />
-          {locationParams.lat && locationParams.lng && (
+          {city && city.trim() && (
             <TouchableOpacity
-              onPress={requestLocationPermission}
-              style={styles.locationButton}
+              onPress={() => {
+                setCity('');
+                AsyncStorage.removeItem(CITY_STORAGE_KEY).catch(err => {
+                  console.log('Error clearing city:', err.message);
+                });
+              }}
+              style={styles.clearCityButton}
             >
-              <Ionicons name="refresh" size={18} color="#007bff" />
+              <Ionicons name="close-circle" size={20} color="#999" />
             </TouchableOpacity>
           )}
         </View>
+        {!city || !city.trim() ? (
+          <View style={styles.cityWarningContainer}>
+            <Ionicons name="information-circle" size={16} color="#dc3545" />
+            <Text style={styles.cityWarningText}>
+              City is required to search for products with local store prices
+            </Text>
+          </View>
+        ) : null}
 
         {/* Search Results */}
         {showResults && (
@@ -342,6 +444,14 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
             <Text style={styles.placeholderSubtext}>
               Search by name, brand, or category
             </Text>
+            {(!city || !city.trim()) && (
+              <View style={styles.cityReminderContainer}>
+                <Ionicons name="alert-circle" size={20} color="#ffc107" />
+                <Text style={styles.cityReminderText}>
+                  Don't forget to enter your city above
+                </Text>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -365,11 +475,29 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e0e0e0',
     backgroundColor: '#fff',
   },
-  closeButton: {
-    width: 40,
-    height: 40,
+  backButton: {
+    width: 50,
+    height: 50,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'transparent',
+    zIndex: 9999,
+    elevation: 10,
+  },
+  backButtonContent: {
+    width: 50,
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backButtonPressed: {
+    opacity: 0.6,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    borderRadius: 25,
+  },
+  backButtonPlaceholder: {
+    width: 44,
+    height: 44,
   },
   headerTitle: {
     fontSize: 20,
@@ -407,7 +535,38 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     paddingHorizontal: 10,
   },
-  locationButton: {
+  cityInputRequired: {
+    borderWidth: 1,
+    borderColor: '#dc3545',
+  },
+  cityWarningContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#fff3cd',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  cityWarningText: {
+    marginLeft: 8,
+    fontSize: 12,
+    color: '#856404',
+  },
+  cityReminderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    padding: 12,
+    backgroundColor: '#fff3cd',
+    borderRadius: 8,
+  },
+  cityReminderText: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#856404',
+  },
+  clearCityButton: {
     marginLeft: 8,
     padding: 4,
   },

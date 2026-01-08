@@ -30,14 +30,6 @@ export default function ShoppingListScreen() {
   const [showScanner, setShowScanner] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
 
-  // Debug logging
-  useEffect(() => {
-    console.log('showSearch changed:', showSearch);
-  }, [showSearch]);
-
-  useEffect(() => {
-    console.log('showScanner changed:', showScanner);
-  }, [showScanner]);
 
   // --- CHANGED: Replaced useEffect with useFocusEffect ---
   // This ensures the list refreshes every time you switch back to this tab.
@@ -187,20 +179,14 @@ export default function ShoppingListScreen() {
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={[styles.scanButton, styles.searchButton]}
-            onPress={() => {
-              console.log('Search button pressed');
-              setShowSearch(true);
-            }}
+            onPress={() => setShowSearch(true)}
             activeOpacity={0.7}
           >
             <Text style={styles.scanButtonText}>🔍 Search</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.scanButton, { marginLeft: 10 }]}
-            onPress={() => {
-              console.log('Scan button pressed');
-              setShowScanner(true);
-            }}
+            onPress={() => setShowScanner(true)}
             activeOpacity={0.7}
           >
             <Text style={styles.scanButtonText}>📷 Scan</Text>
@@ -233,10 +219,9 @@ export default function ShoppingListScreen() {
       {/* Product Search */}
       <ProductSearch
         visible={showSearch}
-          onClose={() => {
-            console.log('Closing search modal');
-            setShowSearch(false);
-          }}
+        onClose={() => {
+          setShowSearch(false);
+        }}
           onProductSelected={async (product, locationParams = {}) => {
             try {
               const response = await axios.post(
