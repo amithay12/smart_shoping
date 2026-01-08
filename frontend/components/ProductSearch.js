@@ -63,16 +63,27 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
     if (!Location) return;
     
     try {
+      // Only request permission if modal is visible and app is ready
+      if (!visible) return;
+      
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const location = await Location.getCurrentPositionAsync({});
-        setLocationParams({
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
-        });
+      if (status === 'granted' && visible) {
+        try {
+          const location = await Location.getCurrentPositionAsync({});
+          if (visible) {
+            setLocationParams({
+              lat: location.coords.latitude,
+              lng: location.coords.longitude,
+            });
+          }
+        } catch (locError) {
+          // Location fetch failed, but that's okay - continue without it
+          console.log('Could not get current location:', locError.message);
+        }
       }
     } catch (error) {
-      console.log('Location not available:', error.message);
+      // Permission request failed, continue without location
+      console.log('Location permission not available:', error.message);
     }
   };
 
@@ -205,12 +216,21 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
     );
   };
 
+  // Debug logging
+  useEffect(() => {
+    console.log('ProductSearch visible prop:', visible);
+    console.log('ProductSearch component mounted/updated');
+  }, [visible]);
+
   return (
     <Modal
       visible={visible}
       animationType="slide"
       transparent={false}
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        console.log('Modal onRequestClose called');
+        if (onClose) onClose();
+      }}
     >
       <View style={styles.container}>
         {/* Header */}

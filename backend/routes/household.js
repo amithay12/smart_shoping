@@ -13,4 +13,8 @@ router.get('/', protect, householdController.getHouseholdDetails);
 // @desc    Get the household's shopping list change history
 router.get('/history', protect, householdController.getChangeHistory);
 
+// @route   POST /api/household/join
+// @desc    Join a household using invite code
+router.post('/join', protect, householdController.joinHousehold);
+
 module.exports = router;

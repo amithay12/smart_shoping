@@ -1,4 +1,4 @@
-import React, { useState, useContext, useCallback } from 'react';
+import React, { useState, useContext, useCallback, useEffect } from 'react';
 import { emit } from '../utils/eventBus';
 import {
   View,
@@ -29,6 +29,15 @@ export default function ShoppingListScreen() {
   const [newItemName, setNewItemName] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('showSearch changed:', showSearch);
+  }, [showSearch]);
+
+  useEffect(() => {
+    console.log('showScanner changed:', showScanner);
+  }, [showScanner]);
 
   // --- CHANGED: Replaced useEffect with useFocusEffect ---
   // This ensures the list refreshes every time you switch back to this tab.
@@ -178,17 +187,29 @@ export default function ShoppingListScreen() {
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={[styles.scanButton, styles.searchButton]}
-            onPress={() => setShowSearch(true)}
+            onPress={() => {
+              console.log('Search button pressed');
+              setShowSearch(true);
+            }}
+            activeOpacity={0.7}
           >
             <Text style={styles.scanButtonText}>🔍 Search</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.scanButton}
-            onPress={() => setShowScanner(true)}
+            style={[styles.scanButton, { marginLeft: 10 }]}
+            onPress={() => {
+              console.log('Scan button pressed');
+              setShowScanner(true);
+            }}
+            activeOpacity={0.7}
           >
             <Text style={styles.scanButtonText}>📷 Scan</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={logout}>
+          <TouchableOpacity 
+            onPress={logout}
+            style={{ marginLeft: 10 }}
+            activeOpacity={0.7}
+          >
             <Text style={styles.logoutButton}>Logout</Text>
           </TouchableOpacity>
         </View>
@@ -212,58 +233,78 @@ export default function ShoppingListScreen() {
       {/* Product Search */}
       <ProductSearch
         visible={showSearch}
-        onClose={() => setShowSearch(false)}
-        onProductSelected={async (product, locationParams = {}) => {
-          try {
-            const response = await axios.post(
-              `${API_URL}/api/list/item`,
-              {
-                name: product.name,
-                quantity: '1',
-                productId: product._id || null,
-                barcode: product.barcode || null,
-                city: locationParams.city,
-                lat: locationParams.lat,
-                lng: locationParams.lng,
-              },
-              { headers: { Authorization: `Bearer ${userToken}` } }
-            );
-            setItems(response.data.items);
-            emit('shoppingList:changed');
-            Alert.alert('Success!', `${product.name} added to your list.`);
-          } catch (error) {
-            console.error('Error adding product:', error);
-            Alert.alert('Error', 'Could not add product to list.');
-          }
-        }}
+          onClose={() => {
+            console.log('Closing search modal');
+            setShowSearch(false);
+          }}
+          onProductSelected={async (product, locationParams = {}) => {
+            try {
+              const response = await axios.post(
+                `${API_URL}/api/list/item`,
+                {
+                  name: product.name,
+                  quantity: '1',
+                  productId: product._id || null,
+                  barcode: product.barcode || null,
+                  city: locationParams.city,
+                  lat: locationParams.lat,
+                  lng: locationParams.lng,
+                },
+                { headers: { Authorization: `Bearer ${userToken}` } }
+              );
+              setItems(response.data.items);
+              emit('shoppingList:changed');
+              setShowSearch(false);
+              // Use setTimeout to ensure modal is closed before showing alert
+              setTimeout(() => {
+                Alert.alert('Success!', `${product.name} added to your list.`);
+              }, 300);
+            } catch (error) {
+              console.error('Error adding product:', error);
+              setShowSearch(false);
+              setTimeout(() => {
+                Alert.alert('Error', 'Could not add product to list.');
+              }, 300);
+            }
+          }}
       />
 
       {/* Barcode Scanner */}
       <BarcodeScanner
         visible={showScanner}
-        onClose={() => setShowScanner(false)}
-        onProductFound={async (product) => {
-          setShowScanner(false);
-          try {
-            const response = await axios.post(
-              `${API_URL}/api/list/item`,
-              {
-                name: product.name,
-                quantity: '1',
-                productId: product._id,
-                barcode: product.barcode,
-              },
-              { headers: { Authorization: `Bearer ${userToken}` } }
-            );
-            setItems(response.data.items);
-            emit('shoppingList:changed');
-            Alert.alert('Success!', `${product.name} added to your list.`);
-          } catch (error) {
-            console.error('Error adding product:', error);
-            Alert.alert('Error', 'Could not add product to list.');
-          }
-        }}
-        userToken={userToken}
+          onClose={() => {
+            console.log('Closing scanner modal');
+            setShowScanner(false);
+          }}
+          onProductFound={async (product, locationParams = {}) => {
+            setShowScanner(false);
+            try {
+              const response = await axios.post(
+                `${API_URL}/api/list/item`,
+                {
+                  name: product.name,
+                  quantity: '1',
+                  productId: product._id,
+                  barcode: product.barcode,
+                  city: locationParams?.city,
+                  lat: locationParams?.lat,
+                  lng: locationParams?.lng,
+                },
+                { headers: { Authorization: `Bearer ${userToken}` } }
+              );
+              setItems(response.data.items);
+              emit('shoppingList:changed');
+              setTimeout(() => {
+                Alert.alert('Success!', `${product.name} added to your list.`);
+              }, 300);
+            } catch (error) {
+              console.error('Error adding product:', error);
+              setTimeout(() => {
+                Alert.alert('Error', 'Could not add product to list.');
+              }, 300);
+            }
+          }}
+          userToken={userToken}
       />
 
       {/* Add Item Form */}
@@ -298,7 +339,6 @@ const styles = StyleSheet.create({
   headerButtons: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
   },
   scanButton: {
     backgroundColor: '#28a745',
