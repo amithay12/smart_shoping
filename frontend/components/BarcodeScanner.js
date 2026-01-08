@@ -91,13 +91,20 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
         try {
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status === 'granted') {
-            const location = await Location.getCurrentPositionAsync({});
-            locationParams.lat = location.coords.latitude;
-            locationParams.lng = location.coords.longitude;
+            try {
+              const location = await Location.getCurrentPositionAsync({
+                timeout: 5000, // 5 second timeout
+              });
+              locationParams.lat = location.coords.latitude;
+              locationParams.lng = location.coords.longitude;
+            } catch (locError) {
+              // Location fetch failed, continue without it
+              console.log('Could not get current location:', locError.message);
+            }
           }
         } catch (error) {
-          // Location not available, continue without it
-          console.log('Location not available:', error.message);
+          // Permission request failed, continue without location
+          console.log('Location permission not available:', error.message);
         }
       }
 
