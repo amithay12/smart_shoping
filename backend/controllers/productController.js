@@ -14,22 +14,21 @@ const { getCHPLocationOptions } = require('../utils/locationHelper');
 exports.lookupByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    // Get location from query params (city name in Hebrew, e.g., "תל אביב", "ירושלים")
-    const { city, street, lat, lng } = req.query;
+    // Get location from query params (supports full address like chp.co.il, e.g., "רחוב דיזנגוף 50, תל אביב" or just "תל אביב")
+    const { address, city, street, lat, lng } = req.query;
 
     if (!barcode || barcode.trim().length === 0) {
       return res.status(400).json({ message: 'Barcode is required' });
     }
 
     // Debug: Log raw query params
-    console.log('Raw query params:', { city, street, lat, lng });
-    console.log('City type:', typeof city, 'City value:', city);
-    console.log('City truthy check:', !!city);
+    console.log('Raw query params:', { address, city, street, lat, lng });
 
     // Prepare location options for CHP
-    // CHP needs city name in Hebrew to show physical store prices
+    // CHP accepts full addresses (like chp.co.il) - priority: address > city > street
     // Convert coordinates to city name if needed
     const locationOptions = getCHPLocationOptions({ 
+      address: address ? decodeURIComponent(address) : null,
       city: city ? decodeURIComponent(city) : null, 
       street: street ? decodeURIComponent(street) : null, 
       lat: lat ? parseFloat(lat) : null, 
@@ -226,11 +225,11 @@ exports.lookupByBarcode = async (req, res) => {
                   );
 
                   const finalStoreType = store.storeType || storeType;
-                  console.log(`[CHP] Adding price to response - Store: ${store.name}, Type: ${finalStoreType}, Price: ${priceInfo.price}`);
+                  console.log(`[CHP] Adding price to response - Store: ${store.name}, Type: ${finalStoreType}, Price: ${priceInfo.price}${priceInfo.distance ? `, Distance: ${priceInfo.distance}km` : ''}`);
                   // Use chain from priceInfo if available (from CHP), otherwise use store.chain
                   const displayChain = priceInfo.chain || store.chain || '';
                   
-                  pricesByStore.push({
+                  const priceEntry = {
                     store: {
                       _id: store._id,
                       name: store.name,
@@ -240,7 +239,14 @@ exports.lookupByBarcode = async (req, res) => {
                     price: priceInfo.price,
                     currency: priceInfo.currency || 'ILS',
                     source: 'chp', // All prices from CHP
-                  });
+                  };
+                  
+                  // Include distance if available (from CHP when address is provided)
+                  if (priceInfo.distance !== undefined && priceInfo.distance !== null) {
+                    priceEntry.distance = priceInfo.distance; // Distance in kilometers
+                  }
+                  
+                  pricesByStore.push(priceEntry);
                 }
               }
             } else {
@@ -414,14 +420,15 @@ exports.lookupByBarcode = async (req, res) => {
  */
 exports.searchProducts = async (req, res) => {
   try {
-    const { q, limit, city, street, lat, lng } = req.query;
+    const { q, limit, address, city, street, lat, lng } = req.query;
 
     if (!q || q.trim().length === 0) {
       return res.status(400).json({ message: 'Search query is required' });
     }
 
-    // Prepare location options
+    // Prepare location options (supports full address like chp.co.il)
     const locationOptions = getCHPLocationOptions({
+      address: address ? decodeURIComponent(address) : null,
       city: city ? decodeURIComponent(city) : null,
       street: street ? decodeURIComponent(street) : null,
       lat: lat ? parseFloat(lat) : null,

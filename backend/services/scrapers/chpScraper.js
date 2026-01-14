@@ -20,8 +20,9 @@ class CHPScraper extends BaseScraper {
    * Search product by barcode
    * @param {string} barcode - Product barcode
    * @param {Object} locationOptions - Location options for physical store prices
-   * @param {string} locationOptions.city - City name (e.g., "תל אביב", "ירושלים")
-   * @param {string} locationOptions.street - Street name (optional)
+   * @param {string} locationOptions.address - Full address (e.g., "רחוב דיזנגוף 50, תל אביב") - like chp.co.il
+   * @param {string} locationOptions.city - City name (e.g., "תל אביב", "ירושלים") - for backwards compatibility
+   * @param {string} locationOptions.street - Street name (optional) - for backwards compatibility
    * @param {number} locationOptions.cityId - City ID from CHP (optional)
    * @param {number} locationOptions.streetId - Street ID from CHP (optional)
    * @returns {Promise<Object|null>} Product data with prices from multiple stores
@@ -30,6 +31,7 @@ class CHPScraper extends BaseScraper {
     try {
       const barcodeClean = barcode.trim();
       const {
+        address = '',
         city = '',
         street = '',
         cityId = 0,
@@ -37,13 +39,16 @@ class CHPScraper extends BaseScraper {
       } = locationOptions;
       
       // Use autocomplete API to find product by barcode (fast endpoint)
-      // If city is provided, CHP will show prices from physical stores in that city
+      // CHP accepts full addresses in shopping_address parameter (like chp.co.il does)
+      // Priority: address > city > street
+      const shoppingAddress = address || city || street || '';
+      
       const response = await axios.get(`${this.apiBase}${this.autocompleteEndpoint}`, {
         params: {
           term: barcodeClean,
           from: 0,
           u: Math.random(),
-          shopping_address: city || street || '',
+          shopping_address: shoppingAddress,
           shopping_address_city_id: cityId || 0,
           shopping_address_street_id: streetId || 0,
         },
@@ -115,15 +120,15 @@ class CHPScraper extends BaseScraper {
       // Don't wait for full price comparison page which is slow
       const basicProduct = this.parseAutocompleteProduct(product);
       
-      // If city is provided, we need full store details (not just basic price)
-      // Always try to get full details when city is provided to get actual store names
-      if (locationOptions.city && product.id && product.id !== 'prev' && product.id !== 'next') {
-        console.log(`[CHP] City provided, fetching full product details for physical stores...`);
+      // If address/city is provided, we need full store details (not just basic price)
+      // Always try to get full details when location is provided to get actual store names
+      if ((locationOptions.address || locationOptions.city) && product.id && product.id !== 'prev' && product.id !== 'next') {
+        console.log(`[CHP] Address/location provided, fetching full product details for physical stores...`);
         try {
           const fullDetails = await Promise.race([
             this.getProductDetails(product.id, barcode.trim(), locationOptions),
             new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Timeout')), 12000) // 12 second max wait for city searches
+              setTimeout(() => reject(new Error('Timeout')), 12000) // 12 second max wait for location searches
             ),
           ]);
           if (fullDetails && fullDetails.pricesByStore && fullDetails.pricesByStore.length > 0) {
@@ -136,8 +141,8 @@ class CHPScraper extends BaseScraper {
         }
       }
       
-      // If we have price range in autocomplete and no city, use it
-      if (basicProduct.price && !locationOptions.city) {
+      // If we have price range in autocomplete and no location, use it
+      if (basicProduct.price && !locationOptions.address && !locationOptions.city) {
         return {
           ...basicProduct,
           pricesByStore: [{
@@ -222,11 +227,15 @@ class CHPScraper extends BaseScraper {
    * @param {string} productId - Product ID (format: store_code_barcode)
    * @param {string} barcode - Product barcode
    * @param {Object} locationOptions - Location options for physical store prices
+   * @param {string} locationOptions.address - Full address (like chp.co.il)
+   * @param {string} locationOptions.city - City name (for backwards compatibility)
+   * @param {string} locationOptions.street - Street name (for backwards compatibility)
    * @returns {Promise<Object|null>} Product with prices from multiple stores
    */
   async getProductDetails(productId, barcode, locationOptions = {}) {
     try {
       const {
+        address = '',
         city = '',
         street = '',
         cityId = 0,
@@ -234,12 +243,15 @@ class CHPScraper extends BaseScraper {
       } = locationOptions;
       
       // Get price comparison page (this is slower, so we limit timeout)
-      // If city is provided, CHP will show prices from physical stores in that city
+      // CHP accepts full addresses in shopping_address parameter (like chp.co.il does)
+      // Priority: address > city > street
+      const shoppingAddress = address || city || street || '';
+      
       const response = await axios.get(`${this.apiBase}${this.compareEndpoint}`, {
         params: {
           product_barcode: productId,
           product_name_or_barcode: '',
-          shopping_address: city || street || '',
+          shopping_address: shoppingAddress,
           shopping_address_street_id: streetId || 0,
           shopping_address_city_id: cityId || 0,
           from: 0,
@@ -302,18 +314,37 @@ class CHPScraper extends BaseScraper {
             return;
           }
           
-          // Table structure: רשת (chain), שם החנות (store name), אתר אינטרנט (website), מבצע (promotion), מחיר (price)
-          // So: td[0] = chain, td[1] = store name, td[2] = website, td[3] = promotion, td[4] = price
           const chainName = tds.eq(0).text().trim();
           const storeNameCell = tds.eq(1);
           const storeName = storeNameCell.find('a').length > 0 
             ? storeNameCell.find('a').text().trim() 
             : storeNameCell.text().trim();
-          const priceText = tds.eq(4).text().trim(); // Price is in 5th column (index 4)
+          
+          // Determine table structure based on number of columns
+          // When address is provided: רשת, שם החנות, כתובת החנות, מרחק (distance), מבצע, מחיר (6 columns)
+          // When no address: רשת, שם החנות, אתר אינטרנט, מבצע, מחיר (5 columns)
+          const hasAddress = tds.length >= 6;
+          
+          let priceText, promotionCell, distance = null;
+          
+          if (hasAddress) {
+            // Table with address: td[0] = chain, td[1] = store name, td[2] = address, td[3] = distance, td[4] = promotion, td[5] = price
+            const distanceText = tds.eq(3).text().trim(); // Distance in format "1 ק\"מ" or "0.3 ק\"מ"
+            // Extract distance number (e.g., "1 ק\"מ" -> 1, "0.3 ק\"מ" -> 0.3)
+            const distanceMatch = distanceText.match(/(\d+\.?\d*)\s*ק/);
+            if (distanceMatch) {
+              distance = parseFloat(distanceMatch[1]);
+            }
+            priceText = tds.eq(5).text().trim(); // Price is in 6th column (index 5)
+            promotionCell = tds.eq(4); // Promotion is in 5th column (index 4)
+          } else {
+            // Table without address: td[0] = chain, td[1] = store name, td[2] = website, td[3] = promotion, td[4] = price
+            priceText = tds.eq(4).text().trim(); // Price is in 5th column (index 4)
+            promotionCell = tds.eq(3); // Promotion is in 4th column (index 3)
+          }
           
           // Try to get price from promotion button if available (discounted price)
           let finalPriceText = priceText;
-          const promotionCell = tds.eq(3);
           const promotionButton = promotionCell.find('button.btn-discount');
           
           if (promotionButton.length) {
@@ -338,12 +369,19 @@ class CHPScraper extends BaseScraper {
           const displayName = storeName || chainName;
           
           if (displayName && price !== null) {
-            prices.push({
+            const priceInfo = {
               store: displayName,
               chain: chainName || '', // Include chain name (e.g., "שופרסל", "רמי לוי")
               price: price,
               currency: 'ILS',
-            });
+            };
+            
+            // Include distance if available (when address is provided)
+            if (distance !== null) {
+              priceInfo.distance = distance; // Distance in kilometers
+            }
+            
+            prices.push(priceInfo);
           }
         });
       }

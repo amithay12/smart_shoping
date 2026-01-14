@@ -169,11 +169,11 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
     try {
       setIsSearching(true);
       
-      // Build search params with location (city is now mandatory)
+      // Build search params with location (address is now mandatory, like chp.co.il)
       const params = { 
         q: query, 
         limit: 20,
-        city: city.trim(), // City is always included
+        address: city.trim(), // Send as address parameter (can be full address like chp.co.il)
       };
       if (locationParams.lat) {
         params.lat = locationParams.lat;
@@ -208,7 +208,7 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
     if (onProductSelected) {
       // Pass location info along with product so prices can be fetched for that location
       onProductSelected(product, {
-        city: city.trim(),
+        address: city.trim(), // Send as address (can be full address)
         lat: locationParams.lat,
         lng: locationParams.lng,
       });
@@ -359,7 +359,7 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
               styles.cityInput,
               !city || !city.trim() ? styles.cityInputRequired : null
             ]}
-            placeholder="Enter city (required) - e.g., תל אביב, ירושלים"
+            placeholder="Enter address (required) - e.g., תל אביב or רחוב דיזנגוף 50, תל אביב"
             placeholderTextColor="#999"
             value={city}
             onChangeText={(text) => {
@@ -392,7 +392,7 @@ export default function ProductSearch({ visible, onClose, onProductSelected }) {
           <View style={styles.cityWarningContainer}>
             <Ionicons name="information-circle" size={16} color="#dc3545" />
             <Text style={styles.cityWarningText}>
-              City is required to search for products with local store prices
+              Address is required to search for products with local store prices (like chp.co.il)
             </Text>
           </View>
         ) : null}

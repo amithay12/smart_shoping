@@ -3,6 +3,29 @@ const Store = require('../models/Store');
 const StoreProduct = require('../models/StoreProduct');
 const Product = require('../models/Product');
 const { geocodeCity } = require('../services/geocodingService');
+const scraperManager = require('../services/scrapers/scraperManager');
+const { getCHPLocationOptions } = require('../utils/locationHelper');
+
+/**
+ * Calculate distance between two coordinates using Haversine formula
+ * @param {number} lat1 - Latitude of first point
+ * @param {number} lng1 - Longitude of first point
+ * @param {number} lat2 - Latitude of second point
+ * @param {number} lng2 - Longitude of second point
+ * @returns {number} Distance in kilometers
+ */
+function calculateDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+  return Math.round(distance * 10) / 10; // Round to 1 decimal place
+}
 
 /**
  * @desc    Get optimized shopping basket - finds cheapest combination of stores
@@ -19,19 +42,22 @@ const { geocodeCity } = require('../services/geocodingService');
 exports.optimizeBasket = async (req, res) => {
   try {
     const householdId = req.user.household;
-    let { lat, lng, city, maxDistance = 50, maxStores = 3 } = req.query;
+    let { lat, lng, address, city, maxDistance = 50, maxStores = 3 } = req.query;
 
-    // If city is provided, geocode it to coordinates
+    // Support full addresses like chp.co.il (priority: address > city for backwards compatibility)
+    const locationInput = address || city;
+    
+    // If address/city is provided, geocode it to coordinates
     // But don't fail if geocoding doesn't work - we can still show stores with prices
-    if (city && city.trim() && (!lat || !lng)) {
-      console.log(`[Basket] Geocoding city: ${city}`);
-      const cityCoordinates = await geocodeCity(city.trim());
-      if (cityCoordinates) {
-        lat = cityCoordinates.lat;
-        lng = cityCoordinates.lng;
-        console.log(`[Basket] City "${city}" geocoded to: ${lat}, ${lng}`);
+    if (locationInput && locationInput.trim() && (!lat || !lng)) {
+      console.log(`[Basket] Geocoding address/location: ${locationInput}`);
+      const locationCoordinates = await geocodeCity(locationInput.trim());
+      if (locationCoordinates) {
+        lat = locationCoordinates.lat;
+        lng = locationCoordinates.lng;
+        console.log(`[Basket] Location "${locationInput}" geocoded to: ${lat}, ${lng}`);
       } else {
-        console.log(`[Basket] Warning: Could not geocode city "${city}", will show all stores with prices`);
+        console.log(`[Basket] Warning: Could not geocode location "${locationInput}", will show all stores with prices`);
         // Don't fail - we can still show stores that have prices for the products
         // Just won't filter by location
       }
@@ -74,80 +100,16 @@ exports.optimizeBasket = async (req, res) => {
       inStock: true,
     }).distinct('store');
 
-    // Get stores filtered by city name (like chp.co.il does)
+    // Get stores filtered by coordinates (like chp.co.il does - uses geocoded address)
     let stores = [];
     
-    // If city is provided, filter stores by city name in address (primary method)
-    if (city && city.trim()) {
-      const cityName = city.trim();
-      console.log(`[Basket] Filtering stores by city name: "${cityName}"`);
-      
-      // Build query to match city name in address.city field (case-insensitive)
-      // Also check fullAddress field as fallback
-      const cityQuery = {
-        $or: [
-          { 'address.city': { $regex: cityName, $options: 'i' } }, // Case-insensitive match
-          { 'address.fullAddress': { $regex: cityName, $options: 'i' } }, // Also check full address
-        ],
-        isActive: true,
-      };
-
-      // First, get stores that have prices AND match the city
-      if (storesWithPrices.length > 0) {
-        stores = await Store.find({
-          _id: { $in: storesWithPrices },
-          ...cityQuery,
-        });
-        console.log(`[Basket] Found ${stores.length} stores with prices in city "${cityName}"`);
-      }
-
-      // Also find other stores in the same city (they might have prices we haven't loaded yet)
-      const cityStores = await Store.find(cityQuery).limit(100);
-      console.log(`[Basket] Found ${cityStores.length} total stores in city "${cityName}"`);
-
-      // Merge stores (avoid duplicates)
-      const existingStoreIds = new Set(stores.map(s => s._id.toString()));
-      for (const cityStore of cityStores) {
-        if (!existingStoreIds.has(cityStore._id.toString())) {
-          stores.push(cityStore);
-        }
-      }
-
-      // If we have location coordinates, also add nearby stores within maxDistance as fallback
-      if (lat && lng && stores.length === 0) {
-        console.log(`[Basket] No stores found by city name, trying nearby stores by location...`);
-        try {
-          const coordinates = [parseFloat(lng), parseFloat(lat)];
-          const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
-
-          if (storesWithPrices.length > 0) {
-            const nearbyStores = await Store.find({
-              _id: { $in: storesWithPrices },
-              isActive: true,
-              location: {
-                $exists: true,
-                $near: {
-                  $geometry: {
-                    type: 'Point',
-                    coordinates: coordinates,
-                  },
-                  $maxDistance: distance,
-                },
-              },
-            }).limit(50);
-            
-            stores = nearbyStores;
-            console.log(`[Basket] Found ${stores.length} nearby stores within ${maxDistance}km as fallback`);
-          }
-        } catch (locationError) {
-          console.log(`[Basket] Warning: Could not query stores by location: ${locationError.message}`);
-        }
-      }
-    } else if (lat && lng) {
-      // Only coordinates provided (no city name) - use location-based filtering
+    // If we have geocoded coordinates (from address or city), use them to find nearby stores
+    if (lat && lng) {
       try {
         const coordinates = [parseFloat(lng), parseFloat(lat)];
-        const distance = parseFloat(maxDistance) * 1000;
+        const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
+
+        console.log(`[Basket] Finding stores within ${maxDistance}km of coordinates: ${lat}, ${lng}`);
 
         if (storesWithPrices.length > 0) {
           stores = await Store.find({
@@ -163,11 +125,52 @@ exports.optimizeBasket = async (req, res) => {
                 $maxDistance: distance,
               },
             },
-          });
+          }).limit(100);
           console.log(`[Basket] Found ${stores.length} stores with prices within ${maxDistance}km`);
         }
       } catch (locationError) {
         console.log(`[Basket] Warning: Could not query stores by location: ${locationError.message}`);
+      }
+    } else if (locationInput && locationInput.trim()) {
+      // If we have location input but no coordinates (geocoding failed), try city name matching as fallback
+      const locationName = locationInput.trim();
+      console.log(`[Basket] Geocoding failed, trying city name matching for: "${locationName}"`);
+      
+      // Try to extract city name from full address (e.g., "הרצל נס ציונה" -> "נס ציונה")
+      // Common patterns: "street, city" or "street city" where city is usually at the end
+      let cityName = locationName;
+      const parts = locationName.split(/[,，]/); // Split by comma (Hebrew comma or regular comma)
+      if (parts.length > 1) {
+        // If comma exists, take the last part as city
+        cityName = parts[parts.length - 1].trim();
+      } else {
+        // No comma - try to extract city by taking last 1-3 words
+        const words = locationName.split(/\s+/);
+        if (words.length > 1) {
+          // Take last 2 words as potential city name (Hebrew cities are often 1-2 words)
+          cityName = words.slice(-2).join(' ').trim();
+        }
+      }
+      
+      console.log(`[Basket] Extracted city name: "${cityName}" from address: "${locationName}"`);
+      
+      // Try matching with extracted city name, or fall back to full address matching
+      const locationQuery = {
+        $or: [
+          { 'address.city': { $regex: cityName, $options: 'i' } },
+          { 'address.fullAddress': { $regex: cityName, $options: 'i' } },
+          // Also try full address match as fallback
+          { 'address.fullAddress': { $regex: locationName, $options: 'i' } },
+        ],
+        isActive: true,
+      };
+
+      if (storesWithPrices.length > 0) {
+        stores = await Store.find({
+          _id: { $in: storesWithPrices },
+          ...locationQuery,
+        }).limit(100);
+        console.log(`[Basket] Found ${stores.length} stores by city name matching`);
       }
     } else {
       // No city or location provided - get all stores that have prices (no filter)
@@ -193,6 +196,69 @@ exports.optimizeBasket = async (req, res) => {
     }
 
     const allStoreIds = stores.map(s => s._id);
+
+    // Get distances from CHP when address is provided (like chp.co.il)
+    // Query CHP for one product to get store distances, then use those distances for all stores
+    const storeDistancesFromCHP = {}; // Map: store name/chain -> distance
+    if (locationInput && locationInput.trim() && productIds.length > 0) {
+      try {
+        const locationOptions = getCHPLocationOptions({
+          address: address ? decodeURIComponent(address) : null,
+          city: city ? decodeURIComponent(city) : null,
+        });
+        
+        // Query CHP for the first product with barcode to get distances
+        const firstProduct = await Product.findById(productIds[0]);
+        if (firstProduct && firstProduct.barcode) {
+          console.log(`[Basket] Querying CHP for distances using product: ${firstProduct.name} (${firstProduct.barcode})`);
+          const chpScraper = scraperManager.scrapers['CHP'];
+          if (chpScraper) {
+            const chpResult = await Promise.race([
+              chpScraper.searchByBarcode(firstProduct.barcode, locationOptions),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('CHP distance fetch timeout')), 10000)
+              ),
+            ]).catch(error => {
+              console.log(`[Basket] CHP distance fetch failed: ${error.message}`);
+              return null;
+            });
+            
+            if (chpResult && chpResult.pricesByStore && Array.isArray(chpResult.pricesByStore)) {
+              console.log(`[Basket] CHP returned ${chpResult.pricesByStore.length} stores total`);
+              // Build map of store name/chain -> distance from CHP
+              chpResult.pricesByStore.forEach(priceInfo => {
+                if (priceInfo.distance !== undefined && priceInfo.distance !== null) {
+                  const storeName = priceInfo.store || '';
+                  const chainName = priceInfo.chain || '';
+                  
+                  // Create multiple keys for flexible matching
+                  if (storeName) {
+                    storeDistancesFromCHP[storeName] = priceInfo.distance;
+                    // Also try with chain prefix/suffix
+                    if (chainName) {
+                      storeDistancesFromCHP[`${chainName} ${storeName}`] = priceInfo.distance;
+                      storeDistancesFromCHP[`${storeName} ${chainName}`] = priceInfo.distance;
+                    }
+                  }
+                  if (chainName) {
+                    storeDistancesFromCHP[chainName] = priceInfo.distance;
+                  }
+                  
+                  // Debug: log what we're storing
+                  console.log(`[Basket] Storing CHP distance: ${priceInfo.distance}km for store="${storeName}", chain="${chainName}"`);
+                }
+              });
+              console.log(`[Basket] Got ${Object.keys(storeDistancesFromCHP).length} store distances from CHP`);
+              console.log(`[Basket] CHP distance map:`, JSON.stringify(storeDistancesFromCHP, null, 2));
+            } else {
+              console.log(`[Basket] CHP result:`, chpResult ? 'result exists but no pricesByStore' : 'null/undefined');
+            }
+          }
+        }
+      } catch (error) {
+        console.log(`[Basket] Error getting distances from CHP: ${error.message}`);
+      }
+    }
 
     // Get all prices for these products at these stores
     const storeProducts = await StoreProduct.find({
@@ -258,9 +324,62 @@ exports.optimizeBasket = async (req, res) => {
 
       if (itemsFound > 0) {
         const coverage = (itemsFound / unpurchasedItems.length) * 100;
+        
+        // Get distance from CHP if available (preferred - like chp.co.il), otherwise calculate from coordinates
+        let storeWithDistance = store.toObject();
+        let distance = null;
+        
+        // Priority 1: Use distance from CHP (when address is provided)
+        if (Object.keys(storeDistancesFromCHP).length > 0) {
+          // Try multiple matching strategies
+          const storeName = store.name || '';
+          const chainName = store.chain || '';
+          
+          // Try exact matches first
+          distance = storeDistancesFromCHP[storeName] || 
+                     storeDistancesFromCHP[chainName] ||
+                     storeDistancesFromCHP[`${chainName} ${storeName}`] ||
+                     storeDistancesFromCHP[`${storeName} ${chainName}`];
+          
+          // If no exact match, try partial matching (store name contains CHP key or vice versa)
+          if (distance === null || distance === undefined) {
+            for (const [key, dist] of Object.entries(storeDistancesFromCHP)) {
+              // Check if store name or chain contains the key, or key contains store name/chain
+              if ((storeName && (key.includes(storeName) || storeName.includes(key))) ||
+                  (chainName && (key.includes(chainName) || chainName.includes(key)))) {
+                distance = dist;
+                console.log(`[Basket] Matched CHP distance via partial match: ${key} -> ${storeName}/${chainName}`);
+                break;
+              }
+            }
+          }
+          
+          if (distance !== null && distance !== undefined) {
+            console.log(`[Basket] ✅ Using CHP distance ${distance}km for store: ${storeName} (${chainName})`);
+          } else {
+            console.log(`[Basket] ❌ No CHP distance match for store: "${storeName}" (chain: "${chainName}")`);
+            console.log(`[Basket] Available CHP keys:`, Object.keys(storeDistancesFromCHP));
+          }
+        }
+        
+        // Priority 2: Calculate distance from coordinates if CHP distance not available
+        if (distance === null && lat && lng && store.location && store.location.coordinates) {
+          const storeLat = store.location.coordinates[1];
+          const storeLng = store.location.coordinates[0];
+          distance = calculateDistance(lat, lng, storeLat, storeLng);
+          console.log(`[Basket] Calculated distance ${distance}km for store: ${store.name}`);
+        }
+        
+        if (distance !== null && distance !== undefined) {
+          storeWithDistance.distance = distance; // Distance in kilometers
+          console.log(`[Basket] ✅ Set distance ${distance}km on store object: ${store.name} (${store.chain})`);
+        } else {
+          console.log(`[Basket] ⚠️ No distance set for store: ${store.name} (${store.chain})`);
+        }
+        
         options.push({
           type: 'single_store',
-          stores: [store.toObject()],
+          stores: [storeWithDistance],
           totalPrice: Math.round(totalPrice * 100) / 100,
           currency: 'ILS',
           itemsFound,
@@ -282,10 +401,48 @@ exports.optimizeBasket = async (req, res) => {
         const storeId = store._id.toString();
         const priceInfo = priceMap[productId]?.[storeId];
         if (priceInfo) {
+          // Get distance from CHP if available (preferred - like chp.co.il), otherwise calculate from coordinates
+          let storeWithDistance = store.toObject();
+          let distance = null;
+          
+          // Priority 1: Use distance from CHP (when address is provided)
+          if (Object.keys(storeDistancesFromCHP).length > 0) {
+            const storeName = store.name || '';
+            const chainName = store.chain || '';
+            
+            // Try exact matches first
+            distance = storeDistancesFromCHP[storeName] || 
+                       storeDistancesFromCHP[chainName] ||
+                       storeDistancesFromCHP[`${chainName} ${storeName}`] ||
+                       storeDistancesFromCHP[`${storeName} ${chainName}`];
+            
+            // If no exact match, try partial matching
+            if (distance === null || distance === undefined) {
+              for (const [key, dist] of Object.entries(storeDistancesFromCHP)) {
+                if ((storeName && (key.includes(storeName) || storeName.includes(key))) ||
+                    (chainName && (key.includes(chainName) || chainName.includes(key)))) {
+                  distance = dist;
+                  break;
+                }
+              }
+            }
+          }
+          
+          // Priority 2: Calculate distance from coordinates if CHP distance not available
+          if (distance === null && lat && lng && store.location && store.location.coordinates) {
+            const storeLat = store.location.coordinates[1];
+            const storeLng = store.location.coordinates[0];
+            distance = calculateDistance(lat, lng, storeLat, storeLng);
+          }
+          
+          if (distance !== null) {
+            storeWithDistance.distance = distance; // Distance in kilometers
+          }
+          
           productPriceComparison[productId][storeId] = {
             price: priceInfo.price,
             currency: priceInfo.currency,
-            store: store.toObject(),
+            store: storeWithDistance,
           };
         }
       }

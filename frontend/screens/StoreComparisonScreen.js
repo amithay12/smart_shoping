@@ -83,10 +83,10 @@ export default function StoreComparisonScreen() {
     try {
       const response = await axios.get(`${API_URL}/api/basket/optimize`, {
         params: {
-          city: cityValue.trim(),
-          maxDistance: 20, // Reduced to 20km to show stores closer to the city
+          address: cityValue.trim(), // Send as address parameter (can be full address like chp.co.il)
+          maxDistance: 20, // Reduced to 20km to show stores closer to the address
           maxStores: 1, // Only single stores
-          _t: Date.now(), // Cache busting - ensures fresh data when city changes
+          _t: Date.now(), // Cache busting - ensures fresh data when address changes
         },
         headers: {
           Authorization: `Bearer ${userToken}`,
@@ -182,6 +182,11 @@ export default function StoreComparisonScreen() {
               </View>
               {store.chain && (
                 <Text style={styles.storeChain}>{store.chain}</Text>
+              )}
+              {store.distance !== null && store.distance !== undefined && (
+                <Text style={styles.storeDistance}>
+                  {store.distance.toFixed(1)} ק"מ
+                </Text>
               )}
             </View>
           </View>
@@ -309,7 +314,7 @@ export default function StoreComparisonScreen() {
             styles.cityInput,
             !city || !city.trim() ? styles.cityInputRequired : null
           ]}
-          placeholder="Enter city (required) - e.g., תל אביב, ירושלים"
+          placeholder="Enter address (required) - e.g., תל אביב or רחוב דיזנגוף 50, תל אביב"
           placeholderTextColor="#999"
           value={city}
           onChangeText={(text) => {
@@ -352,8 +357,8 @@ export default function StoreComparisonScreen() {
       {!city || !city.trim() ? (
         <View style={styles.cityWarningContainer}>
           <Ionicons name="information-circle" size={16} color="#dc3545" />
-          <Text style={styles.cityWarningText}>
-            City is required to compare prices for stores in your area
+            <Text style={styles.cityWarningText}>
+            Address is required to compare prices for stores in your area (like chp.co.il)
           </Text>
         </View>
       ) : null}
@@ -371,7 +376,7 @@ export default function StoreComparisonScreen() {
         <View style={styles.centerContainer}>
           <Ionicons name="location-outline" size={80} color="#ddd" />
           <Text style={styles.placeholderText}>
-            Enter your city to compare prices
+            Enter your address to compare prices (like chp.co.il)
           </Text>
           <Text style={styles.placeholderSubtext}>
             We'll show you stores and prices in your city and nearby areas
@@ -574,6 +579,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 2,
+  },
+  storeDistance: {
+    fontSize: 14,
+    color: '#2196F3',
+    marginTop: 4,
+    fontWeight: '500',
   },
   storeNameRow: {
     flexDirection: 'row',

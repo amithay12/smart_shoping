@@ -1,6 +1,6 @@
 /**
  * Location Helper
- * Converts coordinates to Israeli city names for CHP API
+ * Handles location input for CHP API (supports full addresses like chp.co.il)
  */
 
 // Major Israeli cities with their approximate coordinates
@@ -25,6 +25,7 @@ const ISRAELI_CITIES = [
   { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'כפר סבא' }, // Kfar Saba
   { lat: [32.1, 32.2], lng: [34.8, 34.9], name: 'הוד השרון' }, // Hod HaSharon
   { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'רעננה' }, // Ra'anana
+  { lat: [31.9, 32.0], lng: [34.8, 34.9], name: 'נס ציונה' }, // Ness Ziona
 ];
 
 /**
@@ -51,34 +52,83 @@ function coordinatesToCity(lat, lng) {
 }
 
 /**
+ * Format address with comma separator if it contains a city name
+ * CHP prefers addresses in format "street, city" (e.g., "יוסף פלדמן, נס ציונה")
+ * @param {string} address - Address string
+ * @returns {string} Formatted address with comma if city detected
+ */
+function formatAddressWithComma(address) {
+  if (!address || !address.trim()) return address;
+  
+  const trimmed = address.trim();
+  
+  // If already has comma, return as-is
+  if (trimmed.includes(',')) {
+    return trimmed;
+  }
+  
+  // Check if address ends with a known city name
+  // Try to match city names (check longer names first to avoid partial matches)
+  const cityNames = ISRAELI_CITIES.map(c => c.name).sort((a, b) => b.length - a.length);
+  
+  for (const cityName of cityNames) {
+    // Check if address ends with the city name (with or without space)
+    if (trimmed.endsWith(cityName)) {
+      // Extract the part before the city
+      const beforeCity = trimmed.slice(0, trimmed.length - cityName.length).trim();
+      if (beforeCity) {
+        // Format as "street, city"
+        return `${beforeCity}, ${cityName}`;
+      }
+      // If address is just the city name, return as-is
+      return trimmed;
+    }
+  }
+  
+  // No city detected, return as-is
+  return trimmed;
+}
+
+/**
  * Get location options for CHP API
+ * Supports full addresses like chp.co.il (e.g., "רחוב דיזנגוף 50, תל אביב" or just "תל אביב")
  * @param {Object} options - Location options
- * @param {string} options.city - City name (Hebrew)
- * @param {string} options.street - Street name (Hebrew)
+ * @param {string} options.address - Full address (Hebrew) - preferred format like chp.co.il
+ * @param {string} options.city - City name (Hebrew) - for backwards compatibility
+ * @param {string} options.street - Street name (Hebrew) - for backwards compatibility
  * @param {number} options.lat - Latitude
  * @param {number} options.lng - Longitude
  * @returns {Object} Location options for CHP
  */
 function getCHPLocationOptions(options = {}) {
-  const { city, street, lat, lng } = options;
+  const { address, city, street, lat, lng } = options;
   
-  console.log('getCHPLocationOptions received:', { city, street, lat, lng });
+  console.log('getCHPLocationOptions received:', { address, city, street, lat, lng });
 
-  // If city provided directly, use it (trim whitespace)
+  // Priority 1: Full address (like chp.co.il accepts)
+  // Format with comma if city name detected (e.g., "יוסף פלדמן נס ציונה" -> "יוסף פלדמן, נס ציונה")
+  if (address && address.trim()) {
+    const formattedAddress = formatAddressWithComma(address.trim());
+    console.log('Returning full address option:', formattedAddress);
+    // Return address in a format that CHP scraper will use
+    return { address: formattedAddress };
+  }
+
+  // Priority 2: City name (backwards compatibility)
   if (city && city.trim()) {
     const trimmedCity = city.trim();
     console.log('Returning city option:', trimmedCity);
     return { city: trimmedCity };
   }
 
-  // If street provided, use it
+  // Priority 3: Street name (backwards compatibility)
   if (street && street.trim()) {
     const trimmedStreet = street.trim();
     console.log('Returning street option:', trimmedStreet);
     return { street: trimmedStreet };
   }
 
-  // If coordinates provided, try to convert to city
+  // Priority 4: Coordinates - try to convert to city
   if (lat && lng) {
     const cityName = coordinatesToCity(lat, lng);
     if (cityName) {
