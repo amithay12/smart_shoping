@@ -1,6 +1,6 @@
 /**
  * Location Helper
- * Converts coordinates to Israeli city names for CHP API
+ * Handles location input for CHP API (supports full addresses like chp.co.il)
  */
 
 // Major Israeli cities with their approximate coordinates
@@ -52,33 +52,44 @@ function coordinatesToCity(lat, lng) {
 
 /**
  * Get location options for CHP API
+ * Supports full addresses like chp.co.il (e.g., "רחוב דיזנגוף 50, תל אביב" or just "תל אביב")
  * @param {Object} options - Location options
- * @param {string} options.city - City name (Hebrew)
- * @param {string} options.street - Street name (Hebrew)
+ * @param {string} options.address - Full address (Hebrew) - preferred format like chp.co.il
+ * @param {string} options.city - City name (Hebrew) - for backwards compatibility
+ * @param {string} options.street - Street name (Hebrew) - for backwards compatibility
  * @param {number} options.lat - Latitude
  * @param {number} options.lng - Longitude
  * @returns {Object} Location options for CHP
  */
 function getCHPLocationOptions(options = {}) {
-  const { city, street, lat, lng } = options;
+  const { address, city, street, lat, lng } = options;
   
-  console.log('getCHPLocationOptions received:', { city, street, lat, lng });
+  console.log('getCHPLocationOptions received:', { address, city, street, lat, lng });
 
-  // If city provided directly, use it (trim whitespace)
+  // Priority 1: Full address (like chp.co.il accepts)
+  // This can be "רחוב דיזנגוף 50, תל אביב" or just "תל אביב"
+  if (address && address.trim()) {
+    const trimmedAddress = address.trim();
+    console.log('Returning full address option:', trimmedAddress);
+    // Return address in a format that CHP scraper will use
+    return { address: trimmedAddress };
+  }
+
+  // Priority 2: City name (backwards compatibility)
   if (city && city.trim()) {
     const trimmedCity = city.trim();
     console.log('Returning city option:', trimmedCity);
     return { city: trimmedCity };
   }
 
-  // If street provided, use it
+  // Priority 3: Street name (backwards compatibility)
   if (street && street.trim()) {
     const trimmedStreet = street.trim();
     console.log('Returning street option:', trimmedStreet);
     return { street: trimmedStreet };
   }
 
-  // If coordinates provided, try to convert to city
+  // Priority 4: Coordinates - try to convert to city
   if (lat && lng) {
     const cityName = coordinatesToCity(lat, lng);
     if (cityName) {

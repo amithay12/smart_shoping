@@ -108,13 +108,13 @@ export default function BarcodeScanner({ visible, onClose, onProductFound, userT
         }
       }
 
-      // Build query params
+      // Build query params (send address parameter like chp.co.il)
       const params = new URLSearchParams();
       if (locationParams.lat) params.append('lat', locationParams.lat);
       if (locationParams.lng) params.append('lng', locationParams.lng);
       if (city && city.trim()) {
-        params.append('city', city.trim());
-        console.log('Sending city to backend:', city.trim());
+        params.append('address', city.trim()); // Send as address parameter (can be full address)
+        console.log('Sending address to backend:', city.trim());
       }
       
       const queryString = params.toString();

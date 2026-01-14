@@ -123,7 +123,7 @@ async function fetchPricesForProduct(productId, barcode, locationOptions) {
 // Add item
 exports.addItem = async (req, res) => {
   try {
-    const { name, quantity, productId, barcode, city, lat, lng } = req.body;
+    const { name, quantity, productId, barcode, address, city, lat, lng } = req.body;
     
     // Basic input validation
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -168,9 +168,10 @@ exports.addItem = async (req, res) => {
     });
 
     // If product has barcode and location is provided, fetch prices in background
-    if (barcode && productId && (city || lat || lng)) {
+    if (barcode && productId && (address || city || lat || lng)) {
       const locationOptions = getCHPLocationOptions({
-        city: city ? decodeURIComponent(city) : null,
+        address: address ? (typeof address === 'string' ? address : decodeURIComponent(address)) : null,
+        city: city ? (typeof city === 'string' ? city : decodeURIComponent(city)) : null,
         lat: lat ? parseFloat(lat) : null,
         lng: lng ? parseFloat(lng) : null,
       });
