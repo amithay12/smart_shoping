@@ -224,6 +224,7 @@ exports.optimizeBasket = async (req, res) => {
             });
             
             if (chpResult && chpResult.pricesByStore && Array.isArray(chpResult.pricesByStore)) {
+              console.log(`[Basket] CHP returned ${chpResult.pricesByStore.length} stores total`);
               // Build map of store name/chain -> distance from CHP
               chpResult.pricesByStore.forEach(priceInfo => {
                 if (priceInfo.distance !== undefined && priceInfo.distance !== null) {
@@ -249,6 +250,8 @@ exports.optimizeBasket = async (req, res) => {
               });
               console.log(`[Basket] Got ${Object.keys(storeDistancesFromCHP).length} store distances from CHP`);
               console.log(`[Basket] CHP distance map:`, JSON.stringify(storeDistancesFromCHP, null, 2));
+            } else {
+              console.log(`[Basket] CHP result:`, chpResult ? 'result exists but no pricesByStore' : 'null/undefined');
             }
           }
         }
@@ -369,6 +372,9 @@ exports.optimizeBasket = async (req, res) => {
         
         if (distance !== null && distance !== undefined) {
           storeWithDistance.distance = distance; // Distance in kilometers
+          console.log(`[Basket] ✅ Set distance ${distance}km on store object: ${store.name} (${store.chain})`);
+        } else {
+          console.log(`[Basket] ⚠️ No distance set for store: ${store.name} (${store.chain})`);
         }
         
         options.push({

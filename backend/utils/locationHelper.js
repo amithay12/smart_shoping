@@ -25,6 +25,7 @@ const ISRAELI_CITIES = [
   { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'כפר סבא' }, // Kfar Saba
   { lat: [32.1, 32.2], lng: [34.8, 34.9], name: 'הוד השרון' }, // Hod HaSharon
   { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'רעננה' }, // Ra'anana
+  { lat: [31.9, 32.0], lng: [34.8, 34.9], name: 'נס ציונה' }, // Ness Ziona
 ];
 
 /**
@@ -51,6 +52,44 @@ function coordinatesToCity(lat, lng) {
 }
 
 /**
+ * Format address with comma separator if it contains a city name
+ * CHP prefers addresses in format "street, city" (e.g., "יוסף פלדמן, נס ציונה")
+ * @param {string} address - Address string
+ * @returns {string} Formatted address with comma if city detected
+ */
+function formatAddressWithComma(address) {
+  if (!address || !address.trim()) return address;
+  
+  const trimmed = address.trim();
+  
+  // If already has comma, return as-is
+  if (trimmed.includes(',')) {
+    return trimmed;
+  }
+  
+  // Check if address ends with a known city name
+  // Try to match city names (check longer names first to avoid partial matches)
+  const cityNames = ISRAELI_CITIES.map(c => c.name).sort((a, b) => b.length - a.length);
+  
+  for (const cityName of cityNames) {
+    // Check if address ends with the city name (with or without space)
+    if (trimmed.endsWith(cityName)) {
+      // Extract the part before the city
+      const beforeCity = trimmed.slice(0, trimmed.length - cityName.length).trim();
+      if (beforeCity) {
+        // Format as "street, city"
+        return `${beforeCity}, ${cityName}`;
+      }
+      // If address is just the city name, return as-is
+      return trimmed;
+    }
+  }
+  
+  // No city detected, return as-is
+  return trimmed;
+}
+
+/**
  * Get location options for CHP API
  * Supports full addresses like chp.co.il (e.g., "רחוב דיזנגוף 50, תל אביב" or just "תל אביב")
  * @param {Object} options - Location options
@@ -67,12 +106,12 @@ function getCHPLocationOptions(options = {}) {
   console.log('getCHPLocationOptions received:', { address, city, street, lat, lng });
 
   // Priority 1: Full address (like chp.co.il accepts)
-  // This can be "רחוב דיזנגוף 50, תל אביב" or just "תל אביב"
+  // Format with comma if city name detected (e.g., "יוסף פלדמן נס ציונה" -> "יוסף פלדמן, נס ציונה")
   if (address && address.trim()) {
-    const trimmedAddress = address.trim();
-    console.log('Returning full address option:', trimmedAddress);
+    const formattedAddress = formatAddressWithComma(address.trim());
+    console.log('Returning full address option:', formattedAddress);
     // Return address in a format that CHP scraper will use
-    return { address: trimmedAddress };
+    return { address: formattedAddress };
   }
 
   // Priority 2: City name (backwards compatibility)
