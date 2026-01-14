@@ -10,14 +10,17 @@ import {
   RefreshControl,
   ScrollView,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 const API_URL = 'http://10.0.2.2:5001';
+const CITY_STORAGE_KEY = '@smart_shopping:last_city'; // Same key as ProductSearch
 
 export default function StoreComparisonScreen() {
   const { userToken } = useContext(AuthContext);
@@ -25,8 +28,7 @@ export default function StoreComparisonScreen() {
   const [options, setOptions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [location, setLocation] = useState(null);
-  const [locationError, setLocationError] = useState(null);
+  const [city, setCity] = useState('');
   const [summary, setSummary] = useState(null);
   const [productPriceComparison, setProductPriceComparison] = useState(null);
   const [selectedOption, setSelectedOption] = useState(null);
@@ -34,47 +36,57 @@ export default function StoreComparisonScreen() {
   const [physicalOptions, setPhysicalOptions] = useState([]);
   const [onlineOptions, setOnlineOptions] = useState([]);
 
+  // Load saved city when component mounts
   useEffect(() => {
-    setLocation({ latitude: 32.0853, longitude: 34.7818 });
-    requestLocationPermission();
+    loadSavedCity();
   }, []);
 
-  useEffect(() => {
-    if (location && userToken) {
-      fetchOptimizedBasket();
-    }
-  }, [location, userToken]);
-
-  const requestLocationPermission = async () => {
+  const loadSavedCity = async () => {
     try {
-      const Location = await import('expo-location').catch(() => null);
-      if (Location) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({});
-          setLocation({
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-          });
-          setLocationError(null);
-        }
+      const savedCity = await AsyncStorage.getItem(CITY_STORAGE_KEY);
+      if (savedCity && savedCity.trim()) {
+        setCity(savedCity.trim());
       }
     } catch (error) {
-      console.log('Location not available, using default');
+      console.log('Error loading saved city:', error.message);
     }
   };
 
-  const fetchOptimizedBasket = async () => {
-    if (!location || !userToken) return;
+  useEffect(() => {
+    // Only fetch if we have a valid city and user token
+    // This prevents errors when city is empty
+    if (city && city.trim() && userToken) {
+      // Clear previous results immediately when city changes
+      setOptions([]);
+      setPhysicalOptions([]);
+      setOnlineOptions([]);
+      setSummary(null);
+      setProductPriceComparison(null);
+      // Fetch new data for the new city - pass city as parameter to ensure latest value
+      fetchOptimizedBasket(city.trim());
+    } else if (city === '' && userToken) {
+      // City is explicitly empty (not loaded yet), clear options
+      setOptions([]);
+      setPhysicalOptions([]);
+      setOnlineOptions([]);
+      setSummary(null);
+      setProductPriceComparison(null);
+    }
+  }, [city, userToken]);
+
+  const fetchOptimizedBasket = async (cityToUse = null) => {
+    // Use parameter if provided, otherwise fall back to state (for manual refresh)
+    const cityValue = cityToUse || city;
+    if (!cityValue || !cityValue.trim() || !userToken) return;
 
     setIsLoading(true);
     try {
       const response = await axios.get(`${API_URL}/api/basket/optimize`, {
         params: {
-          lat: location.latitude,
-          lng: location.longitude,
-          maxDistance: 50,
+          city: cityValue.trim(),
+          maxDistance: 20, // Reduced to 20km to show stores closer to the city
           maxStores: 1, // Only single stores
+          _t: Date.now(), // Cache busting - ensures fresh data when city changes
         },
         headers: {
           Authorization: `Bearer ${userToken}`,
@@ -104,13 +116,19 @@ export default function StoreComparisonScreen() {
       }
     } catch (error) {
       console.error('Optimization error:', error);
-      if (error.response?.status === 404) {
+      if (error.response?.status === 400) {
+        const errorMessage = error.response?.data?.message || 'Invalid city name. Please check and try again.';
+        Alert.alert(
+          'City Error',
+          errorMessage
+        );
+      } else if (error.response?.status === 404) {
         Alert.alert(
           'No Options Found',
           'Make sure you have products linked to your shopping list items and prices added to stores.'
         );
       } else {
-        Alert.alert('Error', 'Could not fetch optimized basket options');
+        Alert.alert('Error', error.response?.data?.message || 'Could not fetch optimized basket options');
       }
     } finally {
       setIsLoading(false);
@@ -269,24 +287,97 @@ export default function StoreComparisonScreen() {
 
       <View style={styles.header}>
         <Text style={styles.title}>Store Comparison</Text>
-        <TouchableOpacity onPress={onRefresh} disabled={isLoading}>
+        <TouchableOpacity onPress={onRefresh} disabled={isLoading || !city || !city.trim()}>
           <Ionicons
             name="refresh"
             size={24}
-            color={isLoading ? '#ccc' : '#28a745'}
+            color={isLoading || !city || !city.trim() ? '#ccc' : '#28a745'}
           />
         </TouchableOpacity>
       </View>
+
+      {/* City Input - Mandatory */}
+      <View style={styles.cityContainer}>
+        <Ionicons 
+          name="location" 
+          size={20} 
+          color={city && city.trim() ? "#28a745" : "#dc3545"} 
+          style={styles.locationIcon} 
+        />
+        <TextInput
+          style={[
+            styles.cityInput,
+            !city || !city.trim() ? styles.cityInputRequired : null
+          ]}
+          placeholder="Enter city (required) - e.g., תל אביב, ירושלים"
+          placeholderTextColor="#999"
+          value={city}
+          onChangeText={(text) => {
+            // Update state immediately - this will trigger useEffect to fetch new data
+            setCity(text);
+            // Save to storage when user types
+            if (text && text.trim()) {
+              AsyncStorage.setItem(CITY_STORAGE_KEY, text.trim()).catch(err => {
+                console.log('Error saving city:', err.message);
+              });
+            } else {
+              AsyncStorage.removeItem(CITY_STORAGE_KEY).catch(err => {
+                console.log('Error clearing city:', err.message);
+              });
+            }
+          }}
+          onSubmitEditing={() => {
+            // When user presses enter/done, trigger refresh if city is valid
+            if (city && city.trim() && userToken) {
+              fetchOptimizedBasket(city.trim());
+            }
+          }}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {city && city.trim() && (
+          <TouchableOpacity
+            onPress={() => {
+              setCity('');
+              AsyncStorage.removeItem(CITY_STORAGE_KEY).catch(err => {
+                console.log('Error clearing city:', err.message);
+              });
+            }}
+            style={styles.clearCityButton}
+          >
+            <Ionicons name="close-circle" size={20} color="#999" />
+          </TouchableOpacity>
+        )}
+      </View>
+      {!city || !city.trim() ? (
+        <View style={styles.cityWarningContainer}>
+          <Ionicons name="information-circle" size={16} color="#dc3545" />
+          <Text style={styles.cityWarningText}>
+            City is required to compare prices for stores in your area
+          </Text>
+        </View>
+      ) : null}
 
       {summary && (
         <View style={styles.summaryCard}>
           <Text style={styles.summaryText}>
             Comparing {summary.storesFound} stores • {summary.itemsTotal} items
+            {city && city.trim() && ` • ${city.trim()}`}
           </Text>
         </View>
       )}
 
-      {isLoading && options.length === 0 ? (
+      {!city || !city.trim() ? (
+        <View style={styles.centerContainer}>
+          <Ionicons name="location-outline" size={80} color="#ddd" />
+          <Text style={styles.placeholderText}>
+            Enter your city to compare prices
+          </Text>
+          <Text style={styles.placeholderSubtext}>
+            We'll show you stores and prices in your city and nearby areas
+          </Text>
+        </View>
+      ) : isLoading && options.length === 0 ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#28a745" />
           <Text style={styles.loadingText}>Comparing prices...</Text>
@@ -602,6 +693,67 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 20,
+  },
+  cityContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fafafa',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  locationIcon: {
+    marginRight: 8,
+  },
+  cityInput: {
+    flex: 1,
+    height: 40,
+    fontSize: 16,
+    color: '#333',
+    paddingVertical: 0,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  cityInputRequired: {
+    borderColor: '#dc3545',
+    borderWidth: 2,
+  },
+  clearCityButton: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  cityWarningContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#fff3cd',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  cityWarningText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#856404',
+    flex: 1,
+  },
+  placeholderText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+    marginTop: 20,
+    textAlign: 'center',
+  },
+  placeholderSubtext: {
+    fontSize: 14,
+    color: '#999',
+    marginTop: 8,
+    textAlign: 'center',
+    paddingHorizontal: 40,
   },
   refreshButton: {
     backgroundColor: '#28a745',

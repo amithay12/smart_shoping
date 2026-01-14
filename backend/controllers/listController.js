@@ -67,14 +67,28 @@ async function fetchPricesForProduct(productId, barcode, locationOptions) {
           });
 
           if (!store) {
+            const cityName = locationOptions.city ? locationOptions.city.trim() : null;
             store = await Store.create({
               name: storeName,
               chain: chainName,
-              address: { fullAddress: locationOptions.city || 'Israel' },
+              address: { 
+                city: cityName || undefined,
+                fullAddress: cityName || 'Israel' 
+              },
               location: { type: 'Point', coordinates: [34.7818, 32.0853] },
               isActive: true,
               storeType: storeType,
             });
+          } else {
+            // Update existing store's city if it's missing and we have city info
+            if (locationOptions.city && !store.address?.city) {
+              store.address = store.address || {};
+              store.address.city = locationOptions.city.trim();
+              if (!store.address.fullAddress || store.address.fullAddress === 'Israel') {
+                store.address.fullAddress = locationOptions.city.trim();
+              }
+              await store.save();
+            }
           }
 
           if (product._id && priceInfo.price) {
