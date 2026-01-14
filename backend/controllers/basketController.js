@@ -2,6 +2,7 @@ const ShoppingList = require('../models/ShoppingList');
 const Store = require('../models/Store');
 const StoreProduct = require('../models/StoreProduct');
 const Product = require('../models/Product');
+const { geocodeCity } = require('../services/geocodingService');
 
 /**
  * @desc    Get optimized shopping basket - finds cheapest combination of stores
@@ -18,7 +19,23 @@ const Product = require('../models/Product');
 exports.optimizeBasket = async (req, res) => {
   try {
     const householdId = req.user.household;
-    const { lat, lng, maxDistance = 50, maxStores = 3 } = req.query;
+    let { lat, lng, city, maxDistance = 50, maxStores = 3 } = req.query;
+
+    // If city is provided, geocode it to coordinates
+    // But don't fail if geocoding doesn't work - we can still show stores with prices
+    if (city && city.trim() && (!lat || !lng)) {
+      console.log(`[Basket] Geocoding city: ${city}`);
+      const cityCoordinates = await geocodeCity(city.trim());
+      if (cityCoordinates) {
+        lat = cityCoordinates.lat;
+        lng = cityCoordinates.lng;
+        console.log(`[Basket] City "${city}" geocoded to: ${lat}, ${lng}`);
+      } else {
+        console.log(`[Basket] Warning: Could not geocode city "${city}", will show all stores with prices`);
+        // Don't fail - we can still show stores that have prices for the products
+        // Just won't filter by location
+      }
+    }
 
     // Get shopping list
     const shoppingList = await ShoppingList.findOne({ household: householdId })
@@ -57,48 +74,119 @@ exports.optimizeBasket = async (req, res) => {
       inStock: true,
     }).distinct('store');
 
-    // Get all stores (prioritize stores with prices, then add nearby stores if location provided)
+    // Get stores filtered by city name (like chp.co.il does)
     let stores = [];
     
-    if (storesWithPrices.length > 0) {
-      // Get all stores that have prices for these products
-      stores = await Store.find({
-        _id: { $in: storesWithPrices },
+    // If city is provided, filter stores by city name in address (primary method)
+    if (city && city.trim()) {
+      const cityName = city.trim();
+      console.log(`[Basket] Filtering stores by city name: "${cityName}"`);
+      
+      // Build query to match city name in address.city field (case-insensitive)
+      // Also check fullAddress field as fallback
+      const cityQuery = {
+        $or: [
+          { 'address.city': { $regex: cityName, $options: 'i' } }, // Case-insensitive match
+          { 'address.fullAddress': { $regex: cityName, $options: 'i' } }, // Also check full address
+        ],
         isActive: true,
-      });
-    }
+      };
 
-    // If location is provided, also include nearby stores (they might have prices we haven't loaded yet)
-    if (lat && lng) {
-      const coordinates = [parseFloat(lng), parseFloat(lat)];
-      const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
+      // First, get stores that have prices AND match the city
+      if (storesWithPrices.length > 0) {
+        stores = await Store.find({
+          _id: { $in: storesWithPrices },
+          ...cityQuery,
+        });
+        console.log(`[Basket] Found ${stores.length} stores with prices in city "${cityName}"`);
+      }
 
-      const nearbyStores = await Store.find({
-        isActive: true,
-        location: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates: coordinates,
-            },
-            $maxDistance: distance,
-          },
-        },
-      }).limit(50); // Increased limit
+      // Also find other stores in the same city (they might have prices we haven't loaded yet)
+      const cityStores = await Store.find(cityQuery).limit(100);
+      console.log(`[Basket] Found ${cityStores.length} total stores in city "${cityName}"`);
 
       // Merge stores (avoid duplicates)
       const existingStoreIds = new Set(stores.map(s => s._id.toString()));
-      for (const nearbyStore of nearbyStores) {
-        if (!existingStoreIds.has(nearbyStore._id.toString())) {
-          stores.push(nearbyStore);
+      for (const cityStore of cityStores) {
+        if (!existingStoreIds.has(cityStore._id.toString())) {
+          stores.push(cityStore);
         }
+      }
+
+      // If we have location coordinates, also add nearby stores within maxDistance as fallback
+      if (lat && lng && stores.length === 0) {
+        console.log(`[Basket] No stores found by city name, trying nearby stores by location...`);
+        try {
+          const coordinates = [parseFloat(lng), parseFloat(lat)];
+          const distance = parseFloat(maxDistance) * 1000; // Convert km to meters
+
+          if (storesWithPrices.length > 0) {
+            const nearbyStores = await Store.find({
+              _id: { $in: storesWithPrices },
+              isActive: true,
+              location: {
+                $exists: true,
+                $near: {
+                  $geometry: {
+                    type: 'Point',
+                    coordinates: coordinates,
+                  },
+                  $maxDistance: distance,
+                },
+              },
+            }).limit(50);
+            
+            stores = nearbyStores;
+            console.log(`[Basket] Found ${stores.length} nearby stores within ${maxDistance}km as fallback`);
+          }
+        } catch (locationError) {
+          console.log(`[Basket] Warning: Could not query stores by location: ${locationError.message}`);
+        }
+      }
+    } else if (lat && lng) {
+      // Only coordinates provided (no city name) - use location-based filtering
+      try {
+        const coordinates = [parseFloat(lng), parseFloat(lat)];
+        const distance = parseFloat(maxDistance) * 1000;
+
+        if (storesWithPrices.length > 0) {
+          stores = await Store.find({
+            _id: { $in: storesWithPrices },
+            isActive: true,
+            location: {
+              $exists: true,
+              $near: {
+                $geometry: {
+                  type: 'Point',
+                  coordinates: coordinates,
+                },
+                $maxDistance: distance,
+              },
+            },
+          });
+          console.log(`[Basket] Found ${stores.length} stores with prices within ${maxDistance}km`);
+        }
+      } catch (locationError) {
+        console.log(`[Basket] Warning: Could not query stores by location: ${locationError.message}`);
+      }
+    } else {
+      // No city or location provided - get all stores that have prices (no filter)
+      if (storesWithPrices.length > 0) {
+        stores = await Store.find({
+          _id: { $in: storesWithPrices },
+          isActive: true,
+        });
+        console.log(`[Basket] Found ${stores.length} stores with prices (no location filter)`);
       }
     }
 
     // If no stores found yet, get all active stores as fallback
     if (stores.length === 0) {
-      stores = await Store.find({ isActive: true }).limit(100); // Increased limit
+      console.log(`[Basket] No stores found with prices, falling back to all active stores`);
+      stores = await Store.find({ isActive: true }).limit(100);
     }
+
+    console.log(`[Basket] Total stores to consider: ${stores.length}`);
 
     if (stores.length === 0) {
       return res.status(404).json({ message: 'No stores found' });
