@@ -8,8 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
-  ScrollView,
-  Modal,
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,8 +29,6 @@ export default function StoreComparisonScreen() {
   const [city, setCity] = useState('');
   const [summary, setSummary] = useState(null);
   const [productPriceComparison, setProductPriceComparison] = useState(null);
-  const [selectedOption, setSelectedOption] = useState(null);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [physicalOptions, setPhysicalOptions] = useState([]);
   const [onlineOptions, setOnlineOptions] = useState([]);
 
@@ -141,11 +137,6 @@ export default function StoreComparisonScreen() {
     setRefreshing(false);
   };
 
-  const showProductDetails = (option) => {
-    setSelectedOption(option);
-    setShowDetailsModal(true);
-  };
-
   const renderOption = ({ item, index }) => {
     const isBest = index === 0;
     const store = item.stores[0];
@@ -217,74 +208,10 @@ export default function StoreComparisonScreen() {
             {item.coverage.toFixed(0)}% Coverage ({item.itemsFound}/{item.itemsTotal} items)
           </Text>
         </View>
-
-        <TouchableOpacity
-          style={styles.detailsButton}
-          onPress={() => showProductDetails(item)}
-        >
-          <Text style={styles.detailsButtonText}>View Product Prices</Text>
-          <Ionicons name="chevron-forward" size={16} color="#28a745" />
-        </TouchableOpacity>
       </View>
     );
   };
 
-  const renderProductPriceRow = (productId, productName) => {
-    if (!productPriceComparison || !productPriceComparison[productId]) {
-      return null;
-    }
-
-    const prices = productPriceComparison[productId];
-    const storeIds = Object.keys(prices);
-    
-    if (storeIds.length === 0) return null;
-
-    // Find cheapest and most expensive
-    const priceValues = storeIds.map(sid => prices[sid].price);
-    const cheapest = Math.min(...priceValues);
-    const mostExpensive = Math.max(...priceValues);
-
-    return (
-      <View key={productId} style={styles.productPriceRow}>
-        <Text style={styles.productName}>{productName}</Text>
-        <View style={styles.priceComparisonRow}>
-          {options.map((option, idx) => {
-            const storeId = option.stores[0]._id.toString();
-            const priceInfo = prices[storeId];
-            
-            if (!priceInfo) {
-              return (
-                <View key={idx} style={styles.priceCell}>
-                  <Text style={styles.priceUnavailable}>—</Text>
-                </View>
-              );
-            }
-
-            const isCheapest = priceInfo.price === cheapest && cheapest !== mostExpensive;
-            const isExpensive = priceInfo.price === mostExpensive && cheapest !== mostExpensive;
-
-            return (
-              <View key={idx} style={styles.priceCell}>
-                <Text style={[
-                  styles.priceValue,
-                  isCheapest && styles.priceCheapest,
-                  isExpensive && styles.priceExpensive,
-                ]}>
-                  ₪{priceInfo.price.toFixed(2)}
-                </Text>
-                {isCheapest && (
-                  <Ionicons name="arrow-down" size={12} color="#28a745" />
-                )}
-                {isExpensive && (
-                  <Ionicons name="arrow-up" size={12} color="#ff5722" />
-                )}
-              </View>
-            );
-          })}
-        </View>
-      </View>
-    );
-  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -447,50 +374,6 @@ export default function StoreComparisonScreen() {
           }
         />
       )}
-
-      {/* Product Price Details Modal */}
-      <Modal
-        visible={showDetailsModal}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={() => setShowDetailsModal(false)}
-      >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Product Prices Comparison</Text>
-            <TouchableOpacity onPress={() => setShowDetailsModal(false)}>
-              <Ionicons name="close" size={28} color="#333" />
-            </TouchableOpacity>
-          </View>
-
-          {selectedOption && (
-            <ScrollView style={styles.modalContent}>
-              <View style={styles.storeHeaderRow}>
-                <Text style={styles.storeHeaderLabel}>Product</Text>
-                {options.map((opt, idx) => (
-                  <Text key={idx} style={styles.storeHeaderName}>
-                    {opt.stores[0].chain || opt.stores[0].name}
-                  </Text>
-                ))}
-              </View>
-
-              {selectedOption.items.map((item) => {
-                const productId = item.product._id.toString();
-                return renderProductPriceRow(productId, item.product.name || item.item.name);
-              })}
-
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total</Text>
-                {options.map((opt, idx) => (
-                  <Text key={idx} style={styles.totalValue}>
-                    ₪{opt.totalPrice.toFixed(2)}
-                  </Text>
-                ))}
-              </View>
-            </ScrollView>
-          )}
-        </SafeAreaView>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -658,20 +541,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-  detailsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-    gap: 6,
-  },
-  detailsButtonText: {
-    color: '#28a745',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -776,103 +645,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-  },
-  // Modal styles
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  modalContent: {
-    flex: 1,
-    padding: 15,
-  },
-  storeHeaderRow: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 2,
-    borderBottomColor: '#28a745',
-    marginBottom: 10,
-  },
-  storeHeaderLabel: {
-    flex: 2,
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-  },
-  storeHeaderName: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#666',
-    textAlign: 'center',
-  },
-  productPriceRow: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  productName: {
-    flex: 2,
-    fontSize: 14,
-    color: '#333',
-  },
-  priceComparisonRow: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  priceCell: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  priceValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
-  },
-  priceCheapest: {
-    color: '#28a745',
-    fontWeight: '600',
-  },
-  priceExpensive: {
-    color: '#ff5722',
-  },
-  priceUnavailable: {
-    fontSize: 14,
-    color: '#ccc',
-  },
-  totalRow: {
-    flexDirection: 'row',
-    paddingVertical: 15,
-    marginTop: 10,
-    borderTopWidth: 2,
-    borderTopColor: '#28a745',
-  },
-  totalLabel: {
-    flex: 2,
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  totalValue: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#28a745',
-    textAlign: 'center',
   },
 });
