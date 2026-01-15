@@ -298,6 +298,7 @@ class CHPScraper extends BaseScraper {
       
       if (resultsTable.length) {
         const rows = resultsTable.find('tbody tr');
+        console.log(`[CHP] Found ${rows.length} rows in results table`);
         
         rows.each((index, row) => {
           const $row = $(row);
@@ -311,6 +312,7 @@ class CHPScraper extends BaseScraper {
           const tds = $row.find('td');
           
           if (tds.length < 5) {
+            console.log(`[CHP] Skipping row with ${tds.length} columns (need at least 5)`);
             return;
           }
           
@@ -319,6 +321,8 @@ class CHPScraper extends BaseScraper {
           const storeName = storeNameCell.find('a').length > 0 
             ? storeNameCell.find('a').text().trim() 
             : storeNameCell.text().trim();
+          
+          console.log(`[CHP] Processing store: ${storeName} (${chainName}), columns: ${tds.length}`);
           
           // Determine table structure based on number of columns
           // When address is provided: רשת, שם החנות, כתובת החנות, מרחק (distance), מבצע, מחיר (6 columns)
@@ -330,15 +334,31 @@ class CHPScraper extends BaseScraper {
           if (hasAddress) {
             // Table with address: td[0] = chain, td[1] = store name, td[2] = address, td[3] = distance, td[4] = promotion, td[5] = price
             const distanceText = tds.eq(3).text().trim(); // Distance in format "1 ק\"מ" or "0.3 ק\"מ"
+            console.log(`[CHP] Distance text for ${storeName}: "${distanceText}" (tds.length: ${tds.length})`);
+            
             // Extract distance number (e.g., "1 ק\"מ" -> 1, "0.3 ק\"מ" -> 0.3)
-            const distanceMatch = distanceText.match(/(\d+\.?\d*)\s*ק/);
+            // Try multiple patterns to match Hebrew distance format
+            let distanceMatch = distanceText.match(/(\d+\.?\d*)\s*ק/);
+            if (!distanceMatch) {
+              // Try with Hebrew quote mark: "ק"מ"
+              distanceMatch = distanceText.match(/(\d+\.?\d*)\s*ק["']מ/);
+            }
+            if (!distanceMatch) {
+              // Try just numbers followed by any Hebrew characters
+              distanceMatch = distanceText.match(/(\d+\.?\d*)/);
+            }
+            
             if (distanceMatch) {
               distance = parseFloat(distanceMatch[1]);
+              console.log(`[CHP] Parsed distance: ${distance}km for store: ${storeName}`);
+            } else {
+              console.log(`[CHP] Could not parse distance from: "${distanceText}" for store: ${storeName}`);
             }
             priceText = tds.eq(5).text().trim(); // Price is in 6th column (index 5)
             promotionCell = tds.eq(4); // Promotion is in 5th column (index 4)
           } else {
             // Table without address: td[0] = chain, td[1] = store name, td[2] = website, td[3] = promotion, td[4] = price
+            console.log(`[CHP] No address column (tds.length: ${tds.length}) for store: ${storeName}`);
             priceText = tds.eq(4).text().trim(); // Price is in 5th column (index 4)
             promotionCell = tds.eq(3); // Promotion is in 4th column (index 3)
           }
@@ -379,11 +399,18 @@ class CHPScraper extends BaseScraper {
             // Include distance if available (when address is provided)
             if (distance !== null) {
               priceInfo.distance = distance; // Distance in kilometers
+              console.log(`[CHP] Added store with distance: ${storeName} - ${distance}km`);
+            } else {
+              console.log(`[CHP] Store ${storeName} has no distance (hasAddress: ${hasAddress})`);
             }
             
             prices.push(priceInfo);
           }
         });
+        
+        console.log(`[CHP] Total prices extracted: ${prices.length}, with distances: ${prices.filter(p => p.distance !== null && p.distance !== undefined).length}`);
+      } else {
+        console.log(`[CHP] No results table found in HTML response`);
       }
 
       // Use product name from HTML, don't make another API call

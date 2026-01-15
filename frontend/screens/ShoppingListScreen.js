@@ -9,8 +9,6 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
-  TextInput,
-  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native'; // <--- ADDED THIS IMPORT
@@ -26,7 +24,6 @@ export default function ShoppingListScreen() {
 
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [newItemName, setNewItemName] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
 
@@ -69,28 +66,6 @@ export default function ShoppingListScreen() {
     }, [userToken]) // Removed 'items.length' dependency to avoid loops
   );
   // --- END OF CHANGE ---
-
-  // This adds a new item
-  const handleAddItem = async () => {
-    if (newItemName.trim() === '') {
-      return Alert.alert('Error', 'Please enter an item name.');
-    }
-    try {
-      const response = await axios.post(
-        `${API_URL}/api/list/item`,
-        { name: newItemName, quantity: '1' },
-        { headers: { Authorization: `Bearer ${userToken}` } }
-      );
-      setItems(response.data.items);
-      // Emit change event so other screens (Recommendations) refresh automatically
-      emit('shoppingList:changed');
-      setNewItemName('');
-      Keyboard.dismiss();
-    } catch (error) {
-      console.error('Error adding item:', error.message);
-      Alert.alert('Error', 'Could not add the item.');
-    }
-  };
 
   // This handles Toggling Purchase
   const handleTogglePurchase = async (item) => {
@@ -171,7 +146,7 @@ export default function ShoppingListScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" />
 
       <View style={styles.header}>
@@ -292,16 +267,14 @@ export default function ShoppingListScreen() {
           userToken={userToken}
       />
 
-      {/* Add Item Form */}
-      <View style={styles.formContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g., Milk, Eggs, Bread..."
-          value={newItemName}
-          onChangeText={setNewItemName}
-        />
-        <TouchableOpacity style={styles.addButton} onPress={handleAddItem}>
-          <Text style={styles.addButtonText}>Add</Text>
+      {/* Add Item Button at Bottom */}
+      <View style={styles.bottomButtonContainer}>
+        <TouchableOpacity 
+          style={styles.bottomAddButton} 
+          onPress={() => setShowSearch(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.bottomAddButtonText}>+ Add Item</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -390,31 +363,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: 'gray',
   },
-  formContainer: {
-    flexDirection: 'row',
+  bottomButtonContainer: {
     padding: 20,
+    backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#f0f0f0',
-    backgroundColor: '#fff',
   },
-  input: {
-    flex: 1,
-    height: 50,
-    backgroundColor: '#f2f2f2',
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    fontSize: 16,
-  },
-  addButton: {
-    width: 60,
-    height: 50,
+  bottomAddButton: {
     backgroundColor: '#28a745',
     borderRadius: 10,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 10,
   },
-  addButtonText: {
+  bottomAddButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
