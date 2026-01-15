@@ -9,5 +9,10 @@ const { protect } = require('../middleware/authMiddleware');
 // @access  Private
 router.get('/', protect, recommendationController.getRecommendations);
 
+// @route   POST /api/recommendations/decline
+// @desc    Decline a product recommendation (mark as not interested)
+// @access  Private
+router.post('/decline', protect, recommendationController.declineRecommendation);
+
 module.exports = router;
 

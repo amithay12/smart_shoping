@@ -26,6 +26,7 @@ export default function RecommendationsScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [addingItemId, setAddingItemId] = useState(null);
+  const [decliningItemId, setDecliningItemId] = useState(null);
 
   // Fetch on initial mount / token change
   useEffect(() => {
@@ -109,6 +110,43 @@ export default function RecommendationsScreen() {
     }
   };
 
+  const handleDecline = async (item) => {
+    if (!item.barcode) {
+      Alert.alert('Error', 'Cannot decline item without barcode');
+      return;
+    }
+
+    Alert.alert(
+      'Hide Recommendation',
+      `This will hide "${item.name}" from recommendations for 7 days. After that, it may appear again if you usually buy it.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Hide for 7 Days',
+          style: 'destructive',
+          onPress: async () => {
+            setDecliningItemId(item.barcode);
+            try {
+              await axios.post(
+                `${API_URL}/api/recommendations/decline`,
+                { barcode: item.barcode },
+                { headers: { Authorization: `Bearer ${userToken}` } }
+              );
+              // Optimistically remove it locally
+              setRecommendations((prev) => prev.filter((rec) => rec.barcode !== item.barcode));
+              Alert.alert('Done', 'This product will be hidden from recommendations for 7 days.');
+            } catch (error) {
+              console.error('Error declining recommendation:', error.message);
+              Alert.alert('Error', 'Could not decline recommendation. Please try again.');
+            } finally {
+              setDecliningItemId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -146,17 +184,30 @@ export default function RecommendationsScreen() {
           <Text style={styles.quantityText}>Quantity: {item.quantity}</Text>
         )}
       </View>
-      <TouchableOpacity
-        style={[styles.addButton, addingItemId === item.name && styles.addButtonDisabled]}
-        onPress={() => handleAddToList(item)}
-        disabled={addingItemId === item.name}
-      >
-        {addingItemId === item.name ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.addButtonText}>Add</Text>
-        )}
-      </TouchableOpacity>
+      <View style={styles.buttonContainer}>
+        <TouchableOpacity
+          style={[styles.declineButton, decliningItemId === item.barcode && styles.declineButtonDisabled]}
+          onPress={() => handleDecline(item)}
+          disabled={decliningItemId === item.barcode || addingItemId === item.name}
+        >
+          {decliningItemId === item.barcode ? (
+            <ActivityIndicator size="small" color="#666" />
+          ) : (
+            <Text style={styles.declineButtonText}>✕</Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.addButton, addingItemId === item.name && styles.addButtonDisabled]}
+          onPress={() => handleAddToList(item)}
+          disabled={addingItemId === item.name || decliningItemId === item.barcode}
+        >
+          {addingItemId === item.name ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.addButtonText}>Add</Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -222,16 +273,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
   },
-  itemInfo: { flex: 1, marginRight: 12 },
+  itemInfo: { flex: 1, marginBottom: 12 },
   itemName: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 4 },
   brandText: { fontSize: 14, color: '#888', marginBottom: 6, fontStyle: 'italic' },
   metaContainer: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 },
@@ -239,6 +287,25 @@ const styles = StyleSheet.create({
   lastPurchaseText: { fontSize: 12, color: '#999', marginTop: 4 },
   reasonText: { fontSize: 13, color: '#007bff', fontWeight: '500', marginTop: 4 },
   quantityText: { fontSize: 13, color: '#28a745', fontWeight: '500', marginTop: 4 },
+  buttonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  declineButton: {
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  declineButtonDisabled: { opacity: 0.6 },
+  declineButtonText: { color: '#666', fontSize: 18, fontWeight: '600' },
   addButton: {
     backgroundColor: '#28a745',
     paddingHorizontal: 20,

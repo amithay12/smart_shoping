@@ -24,7 +24,6 @@ const ISRAELI_CITIES = [
   { lat: [32.0, 32.1], lng: [34.8, 34.9], name: 'פתח תקווה' }, // Petah Tikva
   { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'כפר סבא' }, // Kfar Saba
   { lat: [32.1, 32.2], lng: [34.8, 34.9], name: 'הוד השרון' }, // Hod HaSharon
-  { lat: [32.0, 32.1], lng: [34.9, 35.0], name: 'רעננה' }, // Ra'anana
   { lat: [31.9, 32.0], lng: [34.8, 34.9], name: 'נס ציונה' }, // Ness Ziona
 ];
 

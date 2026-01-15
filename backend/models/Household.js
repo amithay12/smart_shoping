@@ -19,6 +19,21 @@ const householdSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+
+    // Declined recommendations - products the household doesn't want to see recommended
+    // Array of barcodes that have been declined
+    declinedRecommendations: [
+      {
+        barcode: {
+          type: String,
+          required: true,
+        },
+        declinedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     // Automatically adds `createdAt` and `updatedAt` timestamps.

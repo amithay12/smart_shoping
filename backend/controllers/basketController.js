@@ -171,6 +171,16 @@ exports.optimizeBasket = async (req, res) => {
           ...locationQuery,
         }).limit(100);
         console.log(`[Basket] Found ${stores.length} stores by city name matching`);
+        
+        // If city name matching found 0 stores, fall back to all stores with prices (no location filter)
+        // This ensures we show stores that have prices even if they don't match the city name
+        if (stores.length === 0) {
+          console.log(`[Basket] City name matching found 0 stores, falling back to all stores with prices (no location filter)`);
+          stores = await Store.find({
+            _id: { $in: storesWithPrices },
+            isActive: true,
+          }).limit(100);
+        }
       }
     } else {
       // No city or location provided - get all stores that have prices (no filter)

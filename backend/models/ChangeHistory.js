@@ -64,4 +64,12 @@ const changeHistorySchema = new mongoose.Schema(
 // a specific household and show it in chronological order.
 changeHistorySchema.index({ household: 1, createdAt: -1 });
 
+// Indexes for recommendation system performance
+// Index for finding purchases by action and barcode
+changeHistorySchema.index({ action: 1, 'itemDetails.barcode': 1, createdAt: -1 });
+// Index for finding purchases by action and product
+changeHistorySchema.index({ action: 1, 'itemDetails.product': 1, createdAt: -1 });
+// Index for global association queries (finding purchases by household and time window)
+changeHistorySchema.index({ household: 1, action: 1, createdAt: -1 });
+
 module.exports = mongoose.model('ChangeHistory', changeHistorySchema);
