@@ -153,11 +153,11 @@ export default function ShoppingListScreen() {
         <Text style={styles.title}>My Shopping List</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity
-            style={[styles.scanButton, styles.searchButton]}
+            style={[styles.scanButton, styles.searchButton, { marginLeft: 10 }]}
             onPress={() => setShowSearch(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.scanButtonText}>🔍 Search</Text>
+            <Text style={styles.scanButtonText}>🔍</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.scanButton, { marginLeft: 10 }]}
@@ -293,6 +293,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 10,
+    flexWrap: 'nowrap',
   },
   headerButtons: {
     flexDirection: 'row',
@@ -313,9 +314,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   title: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#333',
+    flexShrink: 1,
   },
   logoutButton: {
     fontSize: 16,
