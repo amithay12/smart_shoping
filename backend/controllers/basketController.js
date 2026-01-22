@@ -47,6 +47,50 @@ exports.optimizeBasket = async (req, res) => {
     // Support full addresses like chp.co.il (priority: address > city for backwards compatibility)
     const locationInput = address || city;
     
+    // Extract city name from location input for city center fallback
+    let cityName = null;
+    let cityCenterLat = null;
+    let cityCenterLng = null;
+    
+    if (locationInput && locationInput.trim()) {
+      // Try to extract city name from full address (e.g., "הרצל נס ציונה" -> "נס ציונה")
+      const locationName = locationInput.trim();
+      const parts = locationName.split(/[,，]/); // Split by comma (Hebrew comma or regular comma)
+      if (parts.length > 1) {
+        // If comma exists, take the last part as city
+        cityName = parts[parts.length - 1].trim();
+      } else {
+        // No comma - try to extract city by taking last 1-3 words
+        const words = locationName.split(/\s+/);
+        if (words.length > 1) {
+          // Take last 2 words as potential city name (Hebrew cities are often 1-2 words)
+          cityName = words.slice(-2).join(' ').trim();
+        } else {
+          // Single word - might be city name itself
+          cityName = locationName;
+        }
+      }
+      
+      // Geocode city center for fallback distance calculation
+      if (cityName) {
+        console.log(`[Basket] Extracting city center for fallback: "${cityName}"`);
+        try {
+          const cityCenterCoords = await geocodeCity(cityName);
+          if (cityCenterCoords && cityCenterCoords.lat && cityCenterCoords.lng) {
+            cityCenterLat = cityCenterCoords.lat;
+            cityCenterLng = cityCenterCoords.lng;
+            console.log(`[Basket] ✅ City center "${cityName}" geocoded to: ${cityCenterLat}, ${cityCenterLng}`);
+          } else {
+            console.log(`[Basket] ⚠️ Failed to geocode city center for "${cityName}" - no coordinates returned`);
+          }
+        } catch (geocodeError) {
+          console.log(`[Basket] ⚠️ Error geocoding city center for "${cityName}": ${geocodeError.message}`);
+        }
+      } else {
+        console.log(`[Basket] ⚠️ Could not extract city name from location input: "${locationInput}"`);
+      }
+    }
+    
     // If address/city is provided, geocode it to coordinates
     // But don't fail if geocoding doesn't work - we can still show stores with prices
     if (locationInput && locationInput.trim() && (!lat || !lng)) {
@@ -372,19 +416,41 @@ exports.optimizeBasket = async (req, res) => {
           }
         }
         
-        // Priority 2: Calculate distance from coordinates if CHP distance not available
-        if (distance === null && lat && lng && store.location && store.location.coordinates) {
-          const storeLat = store.location.coordinates[1];
-          const storeLng = store.location.coordinates[0];
-          distance = calculateDistance(lat, lng, storeLat, storeLng);
-          console.log(`[Basket] Calculated distance ${distance}km for store: ${store.name}`);
+        // Priority 2: Calculate distance from user's specific address coordinates if CHP distance not available
+        if ((distance === null || distance === undefined) && lat && lng) {
+          if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates) && store.location.coordinates.length >= 2) {
+            const storeLat = store.location.coordinates[1];
+            const storeLng = store.location.coordinates[0];
+            // Validate coordinates are numbers
+            if (typeof storeLat === 'number' && typeof storeLng === 'number' && !isNaN(storeLat) && !isNaN(storeLng)) {
+              distance = calculateDistance(lat, lng, storeLat, storeLng);
+              console.log(`[Basket] ✅ Calculated distance ${distance}km from user address for store: ${store.name}`);
+            }
+          }
+        }
+        
+        // Priority 3: Calculate distance from city center if CHP and user address distances not available
+        if ((distance === null || distance === undefined) && cityCenterLat && cityCenterLng) {
+          if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates) && store.location.coordinates.length >= 2) {
+            const storeLat = store.location.coordinates[1];
+            const storeLng = store.location.coordinates[0];
+            // Validate coordinates are numbers
+            if (typeof storeLat === 'number' && typeof storeLng === 'number' && !isNaN(storeLat) && !isNaN(storeLng)) {
+              distance = calculateDistance(cityCenterLat, cityCenterLng, storeLat, storeLng);
+              console.log(`[Basket] ✅ Calculated distance ${distance}km from city center "${cityName}" for store: ${store.name} (${store.chain})`);
+            } else {
+              console.log(`[Basket] ⚠️ Store has invalid coordinates: ${store.name} - lat: ${storeLat}, lng: ${storeLng}`);
+            }
+          } else {
+            console.log(`[Basket] ⚠️ Store missing location coordinates: ${store.name} (${store.chain}) - location: ${JSON.stringify(store.location)}`);
+          }
         }
         
         if (distance !== null && distance !== undefined) {
           storeWithDistance.distance = distance; // Distance in kilometers
           console.log(`[Basket] ✅ Set distance ${distance}km on store object: ${store.name} (${store.chain})`);
         } else {
-          console.log(`[Basket] ⚠️ No distance set for store: ${store.name} (${store.chain})`);
+          console.log(`[Basket] ⚠️ No distance set for store: ${store.name} (${store.chain}) - CHP: ${storeDistancesFromCHP[store.name] ? 'found' : 'not found'}, User coords: ${lat && lng ? 'yes' : 'no'}, City center: ${cityCenterLat && cityCenterLng ? 'yes' : 'no'}, Store coords: ${store.location?.coordinates ? 'yes' : 'no'}`);
         }
         
         options.push({
@@ -438,11 +504,29 @@ exports.optimizeBasket = async (req, res) => {
             }
           }
           
-          // Priority 2: Calculate distance from coordinates if CHP distance not available
-          if (distance === null && lat && lng && store.location && store.location.coordinates) {
-            const storeLat = store.location.coordinates[1];
-            const storeLng = store.location.coordinates[0];
-            distance = calculateDistance(lat, lng, storeLat, storeLng);
+          // Priority 2: Calculate distance from user's specific address coordinates if CHP distance not available
+          if ((distance === null || distance === undefined) && lat && lng) {
+            if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates) && store.location.coordinates.length >= 2) {
+              const storeLat = store.location.coordinates[1];
+              const storeLng = store.location.coordinates[0];
+              // Validate coordinates are numbers
+              if (typeof storeLat === 'number' && typeof storeLng === 'number' && !isNaN(storeLat) && !isNaN(storeLng)) {
+                distance = calculateDistance(lat, lng, storeLat, storeLng);
+              }
+            }
+          }
+          
+          // Priority 3: Calculate distance from city center if CHP and user address distances not available
+          if ((distance === null || distance === undefined) && cityCenterLat && cityCenterLng) {
+            if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates) && store.location.coordinates.length >= 2) {
+              const storeLat = store.location.coordinates[1];
+              const storeLng = store.location.coordinates[0];
+              // Validate coordinates are numbers
+              if (typeof storeLat === 'number' && typeof storeLng === 'number' && !isNaN(storeLat) && !isNaN(storeLng)) {
+                distance = calculateDistance(cityCenterLat, cityCenterLng, storeLat, storeLng);
+                console.log(`[Basket] ✅ Calculated distance ${distance}km from city center "${cityName}" for product price comparison - store: ${store.name}`);
+              }
+            }
           }
           
           if (distance !== null) {
