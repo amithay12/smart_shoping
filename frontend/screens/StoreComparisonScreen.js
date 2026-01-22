@@ -9,6 +9,8 @@ import {
   Alert,
   RefreshControl,
   TextInput,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';  
 import { StatusBar } from 'expo-status-bar';
@@ -31,6 +33,7 @@ export default function StoreComparisonScreen() {
   const [productPriceComparison, setProductPriceComparison] = useState(null);
   const [physicalOptions, setPhysicalOptions] = useState([]);
   const [onlineOptions, setOnlineOptions] = useState([]);
+  const [selectedStoreProducts, setSelectedStoreProducts] = useState(null);
 
   // Load saved city when component mounts
   useEffect(() => {
@@ -208,6 +211,15 @@ export default function StoreComparisonScreen() {
             {item.coverage.toFixed(0)}% Coverage ({item.itemsFound}/{item.itemsTotal} items)
           </Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.viewProductsButton}
+          onPress={() => setSelectedStoreProducts({ store: store, items: item.items || [] })}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="list" size={16} color="#007bff" />
+          <Text style={styles.viewProductsButtonText}>View Products</Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -374,6 +386,59 @@ export default function StoreComparisonScreen() {
           }
         />
       )}
+
+      {/* Products Modal */}
+      <Modal
+        visible={selectedStoreProducts !== null}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setSelectedStoreProducts(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {selectedStoreProducts?.store?.name || 'Store'} Products
+              </Text>
+              <TouchableOpacity
+                onPress={() => setSelectedStoreProducts(null)}
+                style={styles.closeButton}
+              >
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              {selectedStoreProducts?.items && selectedStoreProducts.items.length > 0 ? (
+                selectedStoreProducts.items.map((itemData, idx) => (
+                  <View key={idx} style={styles.productItem}>
+                    <View style={styles.productInfo}>
+                      <Text style={styles.productName}>
+                        {itemData.item?.name || itemData.product?.name || 'Unknown Product'}
+                      </Text>
+                      {itemData.item?.quantity && (
+                        <Text style={styles.productQuantity}>
+                          Quantity: {itemData.item.quantity}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.productPriceContainer}>
+                      <Text style={styles.productPrice}>
+                        ₪{itemData.price?.toFixed(2) || '0.00'}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyProductsContainer}>
+                  <Ionicons name="cart-outline" size={48} color="#ccc" />
+                  <Text style={styles.emptyProductsText}>No products found for this store</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -645,5 +710,94 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  viewProductsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 10,
+    gap: 6,
+  },
+  viewProductsButtonText: {
+    color: '#007bff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    flex: 1,
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  productItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  productInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  productName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  productQuantity: {
+    fontSize: 14,
+    color: '#666',
+  },
+  productPriceContainer: {
+    alignItems: 'flex-end',
+  },
+  productPrice: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#28a745',
+  },
+  emptyProductsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyProductsText: {
+    fontSize: 16,
+    color: '#999',
+    marginTop: 12,
   },
 });
