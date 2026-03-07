@@ -91,6 +91,15 @@ export default function HistoryScreen() {
         color = '#ffc107'; // Yellow
         text = `${userName} un-purchased ${item.itemDetails?.name || 'an item'}`;
         break;
+      case 'CLEAR_LIST':
+        iconName = 'trash-bin';
+        color = '#dc3545'; // Red
+        if (item.itemDetails?.count != null) {
+          text = `${userName} cleared ${item.itemDetails.count} item${item.itemDetails.count === 1 ? '' : 's'} from the list`;
+        } else {
+          text = `${userName} cleared the shopping list`;
+        }
+        break;
       default:
         text = `${userName} updated ${item.itemDetails?.name || 'an item'}`;
     }

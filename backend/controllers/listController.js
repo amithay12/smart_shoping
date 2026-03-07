@@ -308,3 +308,43 @@ exports.removeItem = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+// @desc    Clear all items from the shopping list
+exports.clearList = async (req, res) => {
+  try {
+    const householdId = req.user.household;
+    const userId = req.user._id;
+
+    const list = await ShoppingList.findOne({ household: householdId });
+    if (!list) {
+      return res.status(404).json({ message: 'List not found' });
+    }
+
+    const itemCount = Array.isArray(list.items) ? list.items.length : 0;
+
+    // If already empty, just return the current list
+    if (itemCount === 0) {
+      const populatedList = await list.populate('items.addedBy', 'displayName email');
+      return res.status(200).json(populatedList);
+    }
+
+    // Log this bulk action
+    await ChangeHistory.create({
+      household: householdId,
+      user: userId,
+      action: 'CLEAR_LIST',
+      itemDetails: {
+        count: itemCount,
+      },
+    });
+
+    list.items = [];
+    await list.save();
+
+    const populatedList = await list.populate('items.addedBy', 'displayName email');
+    res.status(200).json(populatedList);
+  } catch (error) {
+    console.error('Error clearing list:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
