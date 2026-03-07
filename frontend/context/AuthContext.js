@@ -5,6 +5,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut, // פונקציה חדשה להתנתקות
+  sendPasswordResetEmail,
 } from 'firebase/auth';
 import axios from 'axios';
 
@@ -201,6 +202,51 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const resetPassword = async (email) => {
+    try {
+      const trimmedEmail = email?.trim();
+      if (!trimmedEmail) {
+        Alert.alert('Error', 'Please enter your email first');
+        return;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedEmail)) {
+        Alert.alert('Error', 'Please enter a valid email address');
+        return;
+      }
+
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      Alert.alert(
+        'Reset link sent',
+        'We have emailed you a link to reset your password.'
+      );
+    } catch (error) {
+      console.error('Reset Password Error:', error);
+      let errorMessage = 'Could not send reset email';
+
+      if (error.code) {
+        switch (error.code) {
+          case 'auth/user-not-found':
+            errorMessage = 'No account found with this email.';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = 'Please enter a valid email address';
+            break;
+          case 'auth/network-request-failed':
+            errorMessage = 'Network error. Please check your connection.';
+            break;
+          default:
+            errorMessage = error.message || errorMessage;
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert('Reset Password Error', errorMessage);
+    }
+  };
+
   // 3. ה"ערך" (value) שה"מוח" הזה יספק לכל האפליקציה
   // כל רכיב בתוך האפליקציה יוכל לגשת למשתנים האלה
   return (
@@ -212,6 +258,7 @@ export const AuthProvider = ({ children }) => {
         signUp,
         login,
         logout,
+        resetPassword,
       }}
     >
       {children}
