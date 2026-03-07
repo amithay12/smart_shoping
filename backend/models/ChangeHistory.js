@@ -28,6 +28,7 @@ const changeHistorySchema = new mongoose.Schema(
         'UPDATE_ITEM',
         'PURCHASE_ITEM',
         'UNDO_PURCHASE',
+        'CLEAR_LIST',
       ],
     },
 

@@ -104,6 +104,42 @@ export default function ShoppingListScreen() {
     }
   };
 
+  const handleClearListConfirmed = async () => {
+    try {
+      setIsLoading(true);
+      const response = await axios.delete(`${API_URL}/api/list`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      setItems(response.data.items || []);
+      emit('shoppingList:changed');
+    } catch (error) {
+      console.error('Error clearing list:', error.message || error);
+      Alert.alert('Error', 'Could not clear your shopping list.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClearList = () => {
+    if (!items || items.length === 0) {
+      Alert.alert('Nothing to clear', 'Your shopping list is already empty.');
+      return;
+    }
+
+    Alert.alert(
+      'Clear entire list',
+      'Are you sure you want to delete all items from your shopping list?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete All',
+          style: 'destructive',
+          onPress: handleClearListConfirmed,
+        },
+      ]
+    );
+  };
+
   // This shows the Pop-Up Menu
   const handleItemOptions = (item) => {
     const purchaseText = item.isPurchased ? 'Mark as NOT Purchased' : 'Mark as Purchased';
@@ -176,6 +212,16 @@ export default function ShoppingListScreen() {
         </View>
       </View>
       <Text style={styles.subtitle}>Welcome, {userInfo?.email}!</Text>
+
+      <View style={styles.clearListContainer}>
+        <TouchableOpacity
+          style={styles.clearListButton}
+          onPress={handleClearList}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.clearListButtonText}>Clear List</Text>
+        </TouchableOpacity>
+      </View>
 
       {isLoading && items.length === 0 ? (
         <ActivityIndicator size="large" color="#000" style={styles.loader} />
@@ -328,7 +374,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'gray',
     paddingHorizontal: 20,
-    marginBottom: 20,
+    marginBottom: 10,
+  },
+  clearListContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 10,
+  },
+  clearListButton: {
+    backgroundColor: '#dc3545',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearListButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   loader: {
     flex: 1,

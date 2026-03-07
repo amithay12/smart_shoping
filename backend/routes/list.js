@@ -22,4 +22,8 @@ router.put('/item/:itemId', protect, listController.updateItem);
 // @desc    Remove an item from the list
 router.delete('/item/:itemId', protect, listController.removeItem);
 
+// @route   DELETE /api/list/
+// @desc    Clear all items from the list
+router.delete('/', protect, listController.clearList);
+
 module.exports = router;
