@@ -25,7 +25,7 @@ export default function LoginScreen() {
   // --- NEW: We "consume" the global brain ---
   // This line "pulls in" the functions and variables
   // that our AuthProvider is providing.
-  const { isLoading, signUp, login } = useContext(AuthContext);
+  const { isLoading, signUp, login, resetPassword } = useContext(AuthContext);
   // ----------------------------------------
 
   // --- We DELETED the old, long handleSignUp and handleLogin functions ---
@@ -40,6 +40,10 @@ export default function LoginScreen() {
   const handleLoginPress = () => {
     // Just call the function from the context!
     login(email, password);
+  };
+
+  const handleForgotPasswordPress = () => {
+    resetPassword(email);
   };
 
   // The JSX (the UI) is almost identical.
@@ -66,6 +70,13 @@ export default function LoginScreen() {
         onChangeText={setPassword}
         secureTextEntry
       />
+
+      <TouchableOpacity
+        onPress={handleForgotPasswordPress}
+        style={styles.forgotPasswordContainer}
+      >
+        <Text style={styles.forgotPasswordText}>Forgot your password?</Text>
+      </TouchableOpacity>
 
       {isLoading ? (
         <ActivityIndicator size="large" color="#28a745" style={{ marginTop: 20 }} />
@@ -115,6 +126,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     fontSize: 16,
     marginBottom: 15,
+  },
+  forgotPasswordContainer: {
+    width: '100%',
+    alignItems: 'flex-end',
+    marginBottom: 5,
+  },
+  forgotPasswordText: {
+    color: '#007bff',
+    fontSize: 14,
   },
   button: {
     width: '100%',
