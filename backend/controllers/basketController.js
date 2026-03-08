@@ -28,6 +28,148 @@ function calculateDistance(lat1, lng1, lat2, lng2) {
 }
 
 /**
+ * Ensure we have CHP prices saved for a given product at the current location.
+ * This is used by the basket optimizer so that products in the shopping list
+ * get fresh store prices (similar to what the barcode lookup does).
+ *
+ * @param {Object} product - Mongoose Product document (must have barcode)
+ * @param {Object} locationOptions - Output from getCHPLocationOptions
+ */
+async function ensureCHPPricesForProduct(product, locationOptions = {}) {
+  try {
+    if (!product || !product.barcode) {
+      return;
+    }
+
+    const barcode = String(product.barcode).trim();
+    if (!barcode) {
+      return;
+    }
+
+    const chpScraper = scraperManager.scrapers['CHP'];
+    if (!chpScraper) {
+      return;
+    }
+
+    const locationInfo = locationOptions.address
+      ? `address: ${locationOptions.address}`
+      : locationOptions.city
+      ? `city: ${locationOptions.city}`
+      : 'online stores';
+
+    console.log(
+      `[Basket][CHP] Ensuring prices for barcode ${barcode} at ${locationInfo}...`
+    );
+
+    const chpResult = await Promise.race([
+      chpScraper.searchByBarcode(barcode, locationOptions),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('CHP search timeout (basket)')), 15000)
+      ),
+    ]).catch((error) => {
+      console.error(
+        `[Basket][CHP] Search failed or timed out for ${barcode}: ${error.message}`
+      );
+      return null;
+    });
+
+    if (
+      !chpResult ||
+      !Array.isArray(chpResult.pricesByStore) ||
+      chpResult.pricesByStore.length === 0
+    ) {
+      console.log(
+        `[Basket][CHP] No pricesByStore returned for barcode ${barcode} at this location`
+      );
+      return;
+    }
+
+    console.log(
+      `[Basket][CHP] Got ${chpResult.pricesByStore.length} prices for barcode ${barcode}`
+    );
+
+    // When we have address (e.g. "הרצל, נס ציונה") treat as physical and extract city for store matching
+    const hasLocation = !!(locationOptions.address || locationOptions.city);
+    const storeType = hasLocation ? 'physical' : 'online';
+    let cityName = locationOptions.city ? locationOptions.city.trim() : null;
+    if (!cityName && locationOptions.address) {
+      const parts = String(locationOptions.address).split(/[,，]/);
+      cityName = parts.length > 1 ? parts[parts.length - 1].trim() : locationOptions.address.trim();
+    }
+
+    for (const priceInfo of chpResult.pricesByStore) {
+      const chainName = priceInfo.chain || priceInfo.store;
+      const storeName = priceInfo.store || chainName;
+
+      if (!storeName) {
+        continue;
+      }
+
+      let store = await Store.findOne({
+        chain: chainName,
+        name: storeName,
+        storeType: storeType,
+      });
+
+      if (!store) {
+        store = await Store.create({
+          name: storeName,
+          chain: chainName,
+          address: {
+            city: cityName || undefined,
+            fullAddress: cityName || locationOptions.address || 'Israel',
+          },
+          location: { type: 'Point', coordinates: [34.7818, 32.0853] },
+          isActive: true,
+          storeType: storeType,
+        });
+        console.log(
+          `[Basket][CHP] Created new store for product prices: ${storeName} (${chainName}) in city: ${
+            cityName || 'N/A'
+          }`
+        );
+      } else if (cityName && !store.address?.city) {
+        store.address = store.address || {};
+        store.address.city = cityName;
+        if (!store.address.fullAddress || store.address.fullAddress === 'Israel') {
+          store.address.fullAddress = cityName;
+        }
+        await store.save();
+        console.log(
+          `[Basket][CHP] Updated existing store city for product prices: ${storeName} -> ${cityName}`
+        );
+      }
+
+      if (product._id && priceInfo.price) {
+        await StoreProduct.findOneAndUpdate(
+          { product: product._id, store: store._id },
+          {
+            price: priceInfo.price,
+            currency: priceInfo.currency || 'ILS',
+            unitPrice: priceInfo.price,
+            isAvailable: true,
+            inStock: true,
+            lastPriceUpdate: new Date(),
+            $push: {
+              priceHistory: {
+                price: priceInfo.price,
+                date: new Date(),
+              },
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      `[Basket][CHP] Error ensuring prices for product ${product?._id}:`,
+      error.message
+    );
+  }
+}
+
+/**
  * @desc    Get optimized shopping basket - finds cheapest combination of stores
  * @route   GET /api/basket/optimize
  * @access  Private
@@ -125,15 +267,90 @@ exports.optimizeBasket = async (req, res) => {
       });
     }
 
-    // Get product IDs from shopping list first
-    const productIds = unpurchasedItems
+    // Get product refs from shopping list (may be populated docs or just ObjectIds)
+    const productRefs = unpurchasedItems
       .map(item => item.product)
       .filter(Boolean); // Remove null/undefined
 
-    if (productIds.length === 0) {
+    if (productRefs.length === 0) {
       return res.status(400).json({
         message: 'No products linked to shopping list items. Please scan barcodes or link products first.',
       });
+    }
+
+    // Normalize to ObjectIds for queries (item.product can be populated doc with _id or raw ObjectId)
+    const productIds = productRefs.map(p => (p && (p._id || p))).filter(Boolean);
+
+    // Ensure we have CHP prices for all products in the basket at the current location
+    const chpLocationOptions = getCHPLocationOptions({
+      address: address ? decodeURIComponent(address) : null,
+      city: city ? decodeURIComponent(city) : null,
+    });
+
+    // When user has a location, we need prices in stores that match that location.
+    // Products may have prices in other stores (e.g. "Israel" or different city) - those won't show in compare.
+    // So: only skip CHP if the product has at least one price in a store matching current location.
+    let storeIdsMatchingLocation = [];
+    if (locationInput && locationInput.trim()) {
+      const locationName = locationInput.trim();
+      const parts = locationName.split(/[,，]/);
+      const cityNameForFilter = parts.length > 1 ? parts[parts.length - 1].trim() : locationName;
+      const locationQuery = {
+        $or: [
+          { 'address.city': { $regex: cityNameForFilter, $options: 'i' } },
+          { 'address.fullAddress': { $regex: cityNameForFilter, $options: 'i' } },
+          { 'address.fullAddress': { $regex: locationName, $options: 'i' } },
+        ],
+        isActive: true,
+      };
+      storeIdsMatchingLocation = await Store.find(locationQuery).distinct('_id');
+      console.log(`[Basket][CHP] Stores matching location "${cityNameForFilter}": ${storeIdsMatchingLocation.length}`);
+    }
+
+    const uniqueProductIdStrings = [...new Set(productIds.map(id => id.toString()))];
+
+    for (const productIdStr of uniqueProductIdStrings) {
+      try {
+        const product = await Product.findById(productIdStr);
+        if (!product || !product.barcode) {
+          console.log(`[Basket][CHP] Skip product ${productIdStr}: no product or no barcode`);
+          continue;
+        }
+
+        const barcodeStr = String(product.barcode).trim();
+        const existingPriceCount = await StoreProduct.countDocuments({
+          product: product._id,
+          isAvailable: true,
+          inStock: true,
+        });
+
+        if (storeIdsMatchingLocation.length > 0) {
+          const pricesInMatchingStores = await StoreProduct.countDocuments({
+            product: product._id,
+            store: { $in: storeIdsMatchingLocation },
+            isAvailable: true,
+            inStock: true,
+          });
+          if (pricesInMatchingStores > 0) {
+            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${pricesInMatchingStores} prices in location`);
+            continue;
+          }
+          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (${barcodeStr}) - has ${existingPriceCount} prices elsewhere but 0 in current location`);
+        } else {
+          if (existingPriceCount > 0) {
+            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${existingPriceCount} prices`);
+            continue;
+          }
+          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (barcode ${barcodeStr})`);
+        }
+
+        await ensureCHPPricesForProduct(product, chpLocationOptions);
+      } catch (priceError) {
+        console.error(
+          `[Basket][CHP] Error while ensuring prices for product ${productIdStr}:`,
+          priceError.message
+        );
+      }
     }
 
     // First, find all stores that have prices for these products
