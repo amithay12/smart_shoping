@@ -325,20 +325,12 @@ exports.optimizeBasket = async (req, res) => {
         });
 
         if (storeIdsMatchingLocation.length > 0) {
-          const pricesInMatchingStores = await StoreProduct.countDocuments({
-            product: product._id,
-            store: { $in: storeIdsMatchingLocation },
-            isAvailable: true,
-            inStock: true,
-          });
-          if (pricesInMatchingStores > 0) {
-            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${pricesInMatchingStores} prices in location`);
-            continue;
-          }
-          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (${barcodeStr}) - has ${existingPriceCount} prices elsewhere but 0 in current location`);
+          // When we have a location, always call CHP so we get the full store list (e.g. יוחננוף נס ציונה).
+          // Skipping when we had "some" prices meant we never added other stores CHP shows (e.g. יוחננוף).
+          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (${barcodeStr}) at location (full CHP store list)`);
         } else {
           if (existingPriceCount > 0) {
-            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${existingPriceCount} prices`);
+            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${existingPriceCount} prices (no location)`);
             continue;
           }
           console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (barcode ${barcodeStr})`);
@@ -792,11 +784,36 @@ exports.optimizeBasket = async (req, res) => {
       return storeType === 'online' && opt.type === 'single_store';
     });
 
-    // Combine: physical first, then online
-    const finalOptions = [
-      ...physicalOptions.slice(0, 10),
-      ...onlineOptions.slice(0, 10),
+    // Take more options so products that appear in fewer stores (e.g. סטייק ציפס) still show
+    const physicalLimit = 20;
+    const onlineLimit = 10;
+    let finalOptions = [
+      ...physicalOptions.slice(0, physicalLimit),
+      ...onlineOptions.slice(0, onlineLimit),
     ];
+
+    // Ensure every product in the list appears in at least one shown option
+    const productIdsInList = unpurchasedItems
+      .map(item => item.product && (item.product._id || item.product))
+      .filter(Boolean)
+      .map(id => id.toString());
+    const productIdsInFinal = new Set();
+    finalOptions.forEach(opt => {
+      (opt.items || []).forEach(it => {
+        if (it.product && it.product._id) productIdsInFinal.add(it.product._id.toString());
+      });
+    });
+    productIdsInList.forEach(pid => {
+      if (productIdsInFinal.has(pid)) return;
+      const bestWithProduct = physicalOptions.find(opt =>
+        (opt.items || []).some(it => it.product && (it.product._id || it.product).toString() === pid)
+      ) || onlineOptions.find(opt =>
+        (opt.items || []).some(it => it.product && (it.product._id || it.product).toString() === pid)
+      );
+      if (bestWithProduct && !finalOptions.includes(bestWithProduct)) {
+        finalOptions.push(bestWithProduct);
+      }
+    });
 
     res.status(200).json({
       success: true,
