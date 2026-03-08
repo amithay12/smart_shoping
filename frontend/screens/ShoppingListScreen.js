@@ -48,8 +48,9 @@ export default function ShoppingListScreen() {
           }
         } catch (error) {
           console.error('Error fetching list:', error.message);
-          // Optional: You can uncomment this if you want an alert every time connection fails
-          // Alert.alert('Error', 'Could not fetch your shopping list.');
+          if (error.response?.status === 401) {
+            logout();
+          }
         }
         
         if (isActive) setIsLoading(false);

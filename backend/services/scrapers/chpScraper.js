@@ -7,6 +7,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const BaseScraper = require('./baseScraper');
+const { normalizeStoreText } = require('../../utils/textNormalizer');
 
 class CHPScraper extends BaseScraper {
   constructor() {
@@ -425,11 +426,13 @@ class CHPScraper extends BaseScraper {
             return;
           }
           
-          const chainName = tds.eq(0).text().trim();
+          const chainName = normalizeStoreText(tds.eq(0).text().trim());
           const storeNameCell = tds.eq(1);
-          const storeName = storeNameCell.find('a').length > 0 
-            ? storeNameCell.find('a').text().trim() 
-            : storeNameCell.text().trim();
+          const storeName = normalizeStoreText(
+            storeNameCell.find('a').length > 0 
+              ? storeNameCell.find('a').text().trim() 
+              : storeNameCell.text().trim()
+          );
           
           console.log(`[CHP] Processing store: ${storeName} (${chainName}), columns: ${tds.length}`);
           
@@ -494,20 +497,20 @@ class CHPScraper extends BaseScraper {
           
           const price = this.normalizePrice(finalPriceText);
           
-          // Use store name if available, otherwise use chain name
+          // Use store name if available, otherwise use chain name (already normalized above)
           const displayName = storeName || chainName;
           
-          if (displayName && price !== null) {
+          // Include row when we have a valid price, OR when we have distance (so basket can show distance even if price failed to parse)
+          if (displayName && (price !== null || distance !== null)) {
             const priceInfo = {
               store: displayName,
-              chain: chainName || '', // Include chain name (e.g., "שופרסל", "רמי לוי")
-              price: price,
+              chain: chainName || '',
+              price: price !== null ? price : 0,
               currency: 'ILS',
             };
             
-            // Include distance if available (when address is provided)
             if (distance !== null) {
-              priceInfo.distance = distance; // Distance in kilometers
+              priceInfo.distance = distance;
               console.log(`[CHP] Added store with distance: ${storeName} - ${distance}km`);
             } else {
               console.log(`[CHP] Store ${storeName} has no distance (hasAddress: ${hasAddress})`);
