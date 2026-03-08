@@ -7,6 +7,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const BaseScraper = require('./baseScraper');
+const { normalizeStoreText } = require('../../utils/textNormalizer');
 
 class CHPScraper extends BaseScraper {
   constructor() {
@@ -14,6 +15,48 @@ class CHPScraper extends BaseScraper {
     this.apiBase = 'https://chp.co.il';
     this.autocompleteEndpoint = '/autocompletion/product_extended';
     this.compareEndpoint = '/main_page/compare_results';
+  }
+
+  /**
+   * Extract digits-only from barcode for flexible matching (CHP may use leading zeros or different format)
+   */
+  _barcodeDigits(barcode) {
+    if (!barcode || typeof barcode !== 'string') return '';
+    return String(barcode).replace(/\D/g, '');
+  }
+
+  /**
+   * Check if an autocomplete item's barcode matches our search barcode (exact or digits-only)
+   */
+  _itemBarcodeMatches(item, barcodeClean, barcodeDigits) {
+    if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
+    const m = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
+    if (!m) return false;
+    const itemBarcode = m[1];
+    const itemDigits = this._barcodeDigits(itemBarcode);
+    return itemBarcode === barcodeClean || itemDigits === barcodeDigits || itemDigits.endsWith(barcodeDigits) || barcodeDigits.endsWith(itemDigits);
+  }
+
+  /**
+   * Call compare_results with raw barcode as product_barcode (CHP supports direct barcode lookup)
+   */
+  async _getProductDetailsByBarcode(barcodeClean, locationOptions) {
+    try {
+      console.log(`[CHP] Trying direct barcode compare for barcode: ${barcodeClean}`);
+      const result = await Promise.race([
+        this.getProductDetails(barcodeClean, barcodeClean, locationOptions),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 12000)),
+      ]);
+      if (result && result.pricesByStore && result.pricesByStore.length > 0) {
+        console.log(`[CHP] Got ${result.pricesByStore.length} stores from direct barcode compare (${barcodeClean})`);
+        return result;
+      }
+      console.log(`[CHP] Direct barcode compare returned ${result && result.pricesByStore ? result.pricesByStore.length : 0} stores for ${barcodeClean}`);
+      return result && result.pricesByStore ? result : null;
+    } catch (e) {
+      console.log(`[CHP] Direct barcode compare failed for ${barcodeClean}: ${e.message}`);
+      return null;
+    }
   }
 
   /**
@@ -29,7 +72,8 @@ class CHPScraper extends BaseScraper {
    */
   async searchByBarcode(barcode, locationOptions = {}) {
     try {
-      const barcodeClean = barcode.trim();
+      const barcodeClean = (barcode && String(barcode).trim()) || '';
+      const barcodeDigits = this._barcodeDigits(barcodeClean);
       const {
         address = '',
         city = '',
@@ -57,7 +101,10 @@ class CHPScraper extends BaseScraper {
       });
 
       if (!response.data || !Array.isArray(response.data) || response.data.length === 0) {
-        // Product not in CHP database - this is normal, not an error
+        if (barcodeDigits.length >= 8) {
+          const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+          if (direct) return direct;
+        }
         return null;
       }
 
@@ -67,52 +114,96 @@ class CHPScraper extends BaseScraper {
       );
 
       if (validItems.length === 0) {
+        if (barcodeDigits.length >= 8) {
+          const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+          if (direct) return direct;
+        }
         return null;
       }
 
-      // Strategy 1: Find exact barcode match
-      let product = validItems.find(item => {
-        if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
-        const barcodeMatch = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
-        return barcodeMatch && barcodeMatch[1] === barcodeClean;
-      });
+      // Strategy 1: Exact barcode match (string or digits-only)
+      let product = validItems.find(item => this._itemBarcodeMatches(item, barcodeClean, barcodeDigits));
 
-      // Strategy 2: Try by ID format (store_code_barcode)
+      // Strategy 2: By ID format (store_code_barcode)
       if (!product) {
         product = validItems.find(item => {
           if (!item.id) return false;
-          const parts = item.id.split('_');
-          return parts.length === 2 && parts[1] === barcodeClean;
-        });
-      }
-
-      // Strategy 3: Try partial barcode match (last 8-10 digits)
-      if (!product && barcodeClean.length >= 8) {
-        const partialBarcode = barcodeClean.slice(-8); // Last 8 digits
-        product = validItems.find(item => {
-          if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
-          const barcodeMatch = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
-          if (barcodeMatch) {
-            const itemBarcode = barcodeMatch[1];
-            return itemBarcode.endsWith(partialBarcode) || itemBarcode.slice(-8) === partialBarcode;
+          const parts = String(item.id).split('_');
+          if (parts.length >= 2) {
+            const idBarcode = parts[parts.length - 1];
+            return idBarcode === barcodeClean || this._barcodeDigits(idBarcode) === barcodeDigits;
           }
           return false;
         });
       }
 
-      // Strategy 4: Use first result if it seems related (has barcode in description)
+      // Strategy 3: Partial barcode match (last 8 digits)
+      if (!product && barcodeDigits.length >= 8) {
+        const partial = barcodeDigits.slice(-8);
+        product = validItems.find(item => {
+          if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
+          const m = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
+          if (!m) return false;
+          const d = this._barcodeDigits(m[1]);
+          return d.endsWith(partial) || d.slice(-8) === partial;
+        });
+      }
+
+      // Strategy 4: First result has barcode/digits in description
       if (!product && validItems.length > 0) {
-        const firstItem = validItems[0];
-        if (firstItem.parts && firstItem.parts.manufacturer_and_barcode) {
-          const hasBarcode = firstItem.parts.manufacturer_and_barcode.includes(barcodeClean);
-          if (hasBarcode) {
-            product = firstItem;
+        const first = validItems[0];
+        if (first.parts && first.parts.manufacturer_and_barcode) {
+          const desc = first.parts.manufacturer_and_barcode;
+          if (desc.includes(barcodeClean) || (barcodeDigits.length >= 8 && desc.includes(barcodeDigits))) {
+            product = first;
           }
         }
       }
 
+      // Strategy 5: Any item whose barcode digits equal or contain our barcode digits
+      if (!product && barcodeDigits.length >= 8) {
+        product = validItems.find(item => {
+          if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
+          const m = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
+          if (!m) return false;
+          const d = this._barcodeDigits(m[1]);
+          return d === barcodeDigits || d.endsWith(barcodeDigits) || barcodeDigits.endsWith(d);
+        });
+      }
+
+      // Strategy 6: Single result when search term is all digits
+      if (!product && validItems.length === 1 && /^\d+$/.test(barcodeClean)) {
+        product = validItems[0];
+      }
+
+      // No match on first page - try next autocomplete page (CHP may paginate)
+      if (!product && barcodeDigits.length >= 8) {
+        const response2 = await axios.get(`${this.apiBase}${this.autocompleteEndpoint}`, {
+          params: {
+            term: barcodeClean,
+            from: 20,
+            u: Math.random(),
+            shopping_address: shoppingAddress,
+            shopping_address_city_id: cityId || 0,
+            shopping_address_street_id: streetId || 0,
+          },
+          headers: this.headers,
+          timeout: 5000,
+        }).catch(() => ({ data: [] }));
+        const validItems2 = Array.isArray(response2.data) ? response2.data.filter(item => item.id !== 'prev' && item.id !== 'next' && item.parts) : [];
+        product = validItems2.find(item => this._itemBarcodeMatches(item, barcodeClean, barcodeDigits))
+          || validItems2.find(item => {
+            if (!item.parts || !item.parts.manufacturer_and_barcode) return false;
+            const m = item.parts.manufacturer_and_barcode.match(/ברקוד:\s*(\d+)/);
+            return m && this._barcodeDigits(m[1]) === barcodeDigits;
+          });
+      }
+
       if (!product || !product.parts) {
-        // Product not found in CHP - this is normal
+        if (barcodeDigits.length >= 8) {
+          const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+          if (direct) return direct;
+        }
         return null;
       }
 
@@ -126,7 +217,7 @@ class CHPScraper extends BaseScraper {
         console.log(`[CHP] Address/location provided, fetching full product details for physical stores...`);
         try {
           const fullDetails = await Promise.race([
-            this.getProductDetails(product.id, barcode.trim(), locationOptions),
+            this.getProductDetails(product.id, barcodeClean, locationOptions),
             new Promise((_, reject) => 
               setTimeout(() => reject(new Error('Timeout')), 12000) // 12 second max wait for location searches
             ),
@@ -135,9 +226,17 @@ class CHPScraper extends BaseScraper {
             console.log(`[CHP] Got ${fullDetails.pricesByStore.length} stores from full details`);
             return fullDetails;
           }
+          // Autocomplete ID sometimes doesn't return prices - try compare with raw barcode
+          if (barcodeDigits.length >= 8) {
+            const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+            if (direct && direct.pricesByStore && direct.pricesByStore.length > 0) return direct;
+          }
         } catch (error) {
           console.log(`[CHP] Full details fetch timed out or failed: ${error.message}`);
-          // Fall through to basic product if full details fail
+          if (barcodeDigits.length >= 8) {
+            const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+            if (direct && direct.pricesByStore && direct.pricesByStore.length > 0) return direct;
+          }
         }
       }
       
@@ -154,19 +253,28 @@ class CHPScraper extends BaseScraper {
       }
 
       // If no price in autocomplete, try to get full details (but with timeout)
-      // Only do this if we have a valid product ID
       if (product.id && product.id !== 'prev' && product.id !== 'next') {
         try {
           const fullDetails = await Promise.race([
-            this.getProductDetails(product.id, barcode.trim(), locationOptions),
+            this.getProductDetails(product.id, barcodeClean, locationOptions),
             new Promise((_, reject) => 
               setTimeout(() => reject(new Error('Timeout')), 8000) // 8 second max wait
             ),
           ]);
-          return fullDetails;
+          if (fullDetails && fullDetails.pricesByStore && fullDetails.pricesByStore.length > 0) {
+            return fullDetails;
+          }
+          if (barcodeDigits.length >= 8) {
+            const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+            if (direct) return direct;
+          }
+          return fullDetails || basicProduct;
         } catch (error) {
           console.log(`[CHP] Full details fetch timed out or failed, using basic info: ${error.message}`);
-          // Return basic product info if full details fail
+          if (barcodeDigits.length >= 8) {
+            const direct = await this._getProductDetailsByBarcode(barcodeClean, locationOptions);
+            if (direct) return direct;
+          }
           return basicProduct;
         }
       }
@@ -247,10 +355,12 @@ class CHPScraper extends BaseScraper {
       // Priority: address > city > street
       const shoppingAddress = address || city || street || '';
       
+      // When productId is a raw barcode (all digits), CHP may require product_name_or_barcode for lookup
+      const isBarcodeParam = /^\d+$/.test(String(productId).trim());
       const response = await axios.get(`${this.apiBase}${this.compareEndpoint}`, {
         params: {
           product_barcode: productId,
-          product_name_or_barcode: '',
+          product_name_or_barcode: isBarcodeParam ? String(productId).trim() : '',
           shopping_address: shoppingAddress,
           shopping_address_street_id: streetId || 0,
           shopping_address_city_id: cityId || 0,
@@ -316,11 +426,13 @@ class CHPScraper extends BaseScraper {
             return;
           }
           
-          const chainName = tds.eq(0).text().trim();
+          const chainName = normalizeStoreText(tds.eq(0).text().trim());
           const storeNameCell = tds.eq(1);
-          const storeName = storeNameCell.find('a').length > 0 
-            ? storeNameCell.find('a').text().trim() 
-            : storeNameCell.text().trim();
+          const storeName = normalizeStoreText(
+            storeNameCell.find('a').length > 0 
+              ? storeNameCell.find('a').text().trim() 
+              : storeNameCell.text().trim()
+          );
           
           console.log(`[CHP] Processing store: ${storeName} (${chainName}), columns: ${tds.length}`);
           
@@ -385,20 +497,20 @@ class CHPScraper extends BaseScraper {
           
           const price = this.normalizePrice(finalPriceText);
           
-          // Use store name if available, otherwise use chain name
+          // Use store name if available, otherwise use chain name (already normalized above)
           const displayName = storeName || chainName;
           
-          if (displayName && price !== null) {
+          // Include row when we have a valid price, OR when we have distance (so basket can show distance even if price failed to parse)
+          if (displayName && (price !== null || distance !== null)) {
             const priceInfo = {
               store: displayName,
-              chain: chainName || '', // Include chain name (e.g., "שופרסל", "רמי לוי")
-              price: price,
+              chain: chainName || '',
+              price: price !== null ? price : 0,
               currency: 'ILS',
             };
             
-            // Include distance if available (when address is provided)
             if (distance !== null) {
-              priceInfo.distance = distance; // Distance in kilometers
+              priceInfo.distance = distance;
               console.log(`[CHP] Added store with distance: ${storeName} - ${distance}km`);
             } else {
               console.log(`[CHP] Store ${storeName} has no distance (hasAddress: ${hasAddress})`);

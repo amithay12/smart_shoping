@@ -5,6 +5,7 @@ const Product = require('../models/Product');
 const { geocodeCity } = require('../services/geocodingService');
 const scraperManager = require('../services/scrapers/scraperManager');
 const { getCHPLocationOptions } = require('../utils/locationHelper');
+const { normalizeStoreText, isInvalidStoreName, getCanonicalStoreKey } = require('../utils/textNormalizer');
 
 /**
  * Calculate distance between two coordinates using Haversine formula
@@ -25,6 +26,148 @@ function calculateDistance(lat1, lng1, lat2, lng2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   const distance = R * c;
   return Math.round(distance * 10) / 10; // Round to 1 decimal place
+}
+
+/**
+ * Ensure we have CHP prices saved for a given product at the current location.
+ * This is used by the basket optimizer so that products in the shopping list
+ * get fresh store prices (similar to what the barcode lookup does).
+ *
+ * @param {Object} product - Mongoose Product document (must have barcode)
+ * @param {Object} locationOptions - Output from getCHPLocationOptions
+ */
+async function ensureCHPPricesForProduct(product, locationOptions = {}) {
+  try {
+    if (!product || !product.barcode) {
+      return;
+    }
+
+    const barcode = String(product.barcode).trim();
+    if (!barcode) {
+      return;
+    }
+
+    const chpScraper = scraperManager.scrapers['CHP'];
+    if (!chpScraper) {
+      return;
+    }
+
+    const locationInfo = locationOptions.address
+      ? `address: ${locationOptions.address}`
+      : locationOptions.city
+      ? `city: ${locationOptions.city}`
+      : 'online stores';
+
+    console.log(
+      `[Basket][CHP] Ensuring prices for barcode ${barcode} at ${locationInfo}...`
+    );
+
+    const chpResult = await Promise.race([
+      chpScraper.searchByBarcode(barcode, locationOptions),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('CHP search timeout (basket)')), 15000)
+      ),
+    ]).catch((error) => {
+      console.error(
+        `[Basket][CHP] Search failed or timed out for ${barcode}: ${error.message}`
+      );
+      return null;
+    });
+
+    if (
+      !chpResult ||
+      !Array.isArray(chpResult.pricesByStore) ||
+      chpResult.pricesByStore.length === 0
+    ) {
+      console.log(
+        `[Basket][CHP] No pricesByStore returned for barcode ${barcode} at this location`
+      );
+      return;
+    }
+
+    console.log(
+      `[Basket][CHP] Got ${chpResult.pricesByStore.length} prices for barcode ${barcode}`
+    );
+
+    // When we have address (e.g. "הרצל, נס ציונה") treat as physical and extract city for store matching
+    const hasLocation = !!(locationOptions.address || locationOptions.city);
+    const storeType = hasLocation ? 'physical' : 'online';
+    let cityName = locationOptions.city ? locationOptions.city.trim() : null;
+    if (!cityName && locationOptions.address) {
+      const parts = String(locationOptions.address).split(/[,，]/);
+      cityName = parts.length > 1 ? parts[parts.length - 1].trim() : locationOptions.address.trim();
+    }
+
+    for (const priceInfo of chpResult.pricesByStore) {
+      const chainName = normalizeStoreText(priceInfo.chain || priceInfo.store);
+      const storeName = normalizeStoreText(priceInfo.store || priceInfo.chain || chainName);
+
+      if (!storeName || isInvalidStoreName(storeName) || isInvalidStoreName(chainName)) {
+        continue;
+      }
+
+      let store = await Store.findOne({
+        chain: chainName,
+        name: storeName,
+        storeType: storeType,
+      });
+
+      if (!store) {
+        store = await Store.create({
+          name: storeName,
+          chain: chainName,
+          address: {
+            city: cityName || undefined,
+            fullAddress: cityName || locationOptions.address || 'Israel',
+          },
+          location: { type: 'Point', coordinates: [34.7818, 32.0853] },
+          isActive: true,
+          storeType: storeType,
+        });
+        console.log(
+          `[Basket][CHP] Created new store for product prices: ${storeName} (${chainName}) in city: ${
+            cityName || 'N/A'
+          }`
+        );
+      } else if (cityName && !store.address?.city) {
+        store.address = store.address || {};
+        store.address.city = cityName;
+        if (!store.address.fullAddress || store.address.fullAddress === 'Israel') {
+          store.address.fullAddress = cityName;
+        }
+        await store.save();
+        console.log(
+          `[Basket][CHP] Updated existing store city for product prices: ${storeName} -> ${cityName}`
+        );
+      }
+
+      if (product._id && priceInfo.price) {
+        await StoreProduct.findOneAndUpdate(
+          { product: product._id, store: store._id },
+          {
+            price: priceInfo.price,
+            currency: priceInfo.currency || 'ILS',
+            unitPrice: priceInfo.price,
+            isAvailable: true,
+            inStock: true,
+            lastPriceUpdate: new Date(),
+            $push: {
+              priceHistory: {
+                price: priceInfo.price,
+                date: new Date(),
+              },
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      `[Basket][CHP] Error ensuring prices for product ${product?._id}:`,
+      error.message
+    );
+  }
 }
 
 /**
@@ -125,15 +268,82 @@ exports.optimizeBasket = async (req, res) => {
       });
     }
 
-    // Get product IDs from shopping list first
-    const productIds = unpurchasedItems
+    // Get product refs from shopping list (may be populated docs or just ObjectIds)
+    const productRefs = unpurchasedItems
       .map(item => item.product)
       .filter(Boolean); // Remove null/undefined
 
-    if (productIds.length === 0) {
+    if (productRefs.length === 0) {
       return res.status(400).json({
         message: 'No products linked to shopping list items. Please scan barcodes or link products first.',
       });
+    }
+
+    // Normalize to ObjectIds for queries (item.product can be populated doc with _id or raw ObjectId)
+    const productIds = productRefs.map(p => (p && (p._id || p))).filter(Boolean);
+
+    // Ensure we have CHP prices for all products in the basket at the current location
+    const chpLocationOptions = getCHPLocationOptions({
+      address: address ? decodeURIComponent(address) : null,
+      city: city ? decodeURIComponent(city) : null,
+    });
+
+    // When user has a location, we need prices in stores that match that location.
+    // Products may have prices in other stores (e.g. "Israel" or different city) - those won't show in compare.
+    // So: only skip CHP if the product has at least one price in a store matching current location.
+    let storeIdsMatchingLocation = [];
+    if (locationInput && locationInput.trim()) {
+      const locationName = locationInput.trim();
+      const parts = locationName.split(/[,，]/);
+      const cityNameForFilter = parts.length > 1 ? parts[parts.length - 1].trim() : locationName;
+      const locationQuery = {
+        $or: [
+          { 'address.city': { $regex: cityNameForFilter, $options: 'i' } },
+          { 'address.fullAddress': { $regex: cityNameForFilter, $options: 'i' } },
+          { 'address.fullAddress': { $regex: locationName, $options: 'i' } },
+        ],
+        isActive: true,
+      };
+      storeIdsMatchingLocation = await Store.find(locationQuery).distinct('_id');
+      console.log(`[Basket][CHP] Stores matching location "${cityNameForFilter}": ${storeIdsMatchingLocation.length}`);
+    }
+
+    const uniqueProductIdStrings = [...new Set(productIds.map(id => id.toString()))];
+
+    for (const productIdStr of uniqueProductIdStrings) {
+      try {
+        const product = await Product.findById(productIdStr);
+        if (!product || !product.barcode) {
+          console.log(`[Basket][CHP] Skip product ${productIdStr}: no product or no barcode`);
+          continue;
+        }
+
+        const barcodeStr = String(product.barcode).trim();
+        const existingPriceCount = await StoreProduct.countDocuments({
+          product: product._id,
+          isAvailable: true,
+          inStock: true,
+        });
+
+        if (storeIdsMatchingLocation.length > 0) {
+          // When we have a location, always call CHP so we get the full store list (e.g. יוחננוף נס ציונה).
+          // Skipping when we had "some" prices meant we never added other stores CHP shows (e.g. יוחננוף).
+          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (${barcodeStr}) at location (full CHP store list)`);
+        } else {
+          if (existingPriceCount > 0) {
+            console.log(`[Basket][CHP] Skip product ${product.name} (${barcodeStr}): already has ${existingPriceCount} prices (no location)`);
+            continue;
+          }
+          console.log(`[Basket][CHP] Ensuring prices for: ${product.name} (barcode ${barcodeStr})`);
+        }
+
+        await ensureCHPPricesForProduct(product, chpLocationOptions);
+      } catch (priceError) {
+        console.error(
+          `[Basket][CHP] Error while ensuring prices for product ${productIdStr}:`,
+          priceError.message
+        );
+      }
     }
 
     // First, find all stores that have prices for these products
@@ -279,27 +489,29 @@ exports.optimizeBasket = async (req, res) => {
             
             if (chpResult && chpResult.pricesByStore && Array.isArray(chpResult.pricesByStore)) {
               console.log(`[Basket] CHP returned ${chpResult.pricesByStore.length} stores total`);
-              // Build map of store name/chain -> distance from CHP
+              // Build map of store name/chain -> distance. Use normalized + canonical keys so we match DB stores
+              // even when CHP returns corrupted names like "נס צwLjיוdBYנv2ה" (canonical -> "נס ציונה").
               chpResult.pricesByStore.forEach(priceInfo => {
                 if (priceInfo.distance !== undefined && priceInfo.distance !== null) {
-                  const storeName = priceInfo.store || '';
-                  const chainName = priceInfo.chain || '';
-                  
-                  // Create multiple keys for flexible matching
-                  if (storeName) {
-                    storeDistancesFromCHP[storeName] = priceInfo.distance;
-                    // Also try with chain prefix/suffix
-                    if (chainName) {
-                      storeDistancesFromCHP[`${chainName} ${storeName}`] = priceInfo.distance;
-                      storeDistancesFromCHP[`${storeName} ${chainName}`] = priceInfo.distance;
-                    }
+                  const storeName = normalizeStoreText(priceInfo.store || '');
+                  const chainName = normalizeStoreText(priceInfo.chain || '');
+                  const canonicalStore = getCanonicalStoreKey(storeName || priceInfo.store || '');
+                  const canonicalChain = getCanonicalStoreKey(chainName || priceInfo.chain || '');
+                  const dist = priceInfo.distance;
+                  const setDist = (key) => { if (key) storeDistancesFromCHP[key] = dist; };
+                  setDist(storeName);
+                  setDist(chainName);
+                  if (storeName && chainName) {
+                    setDist(`${chainName} ${storeName}`);
+                    setDist(`${storeName} ${chainName}`);
                   }
-                  if (chainName) {
-                    storeDistancesFromCHP[chainName] = priceInfo.distance;
+                  setDist(canonicalStore);
+                  setDist(canonicalChain);
+                  if (canonicalStore && canonicalChain) {
+                    setDist(`${canonicalChain} ${canonicalStore}`);
+                    setDist(`${canonicalStore} ${canonicalChain}`);
                   }
-                  
-                  // Debug: log what we're storing
-                  console.log(`[Basket] Storing CHP distance: ${priceInfo.distance}km for store="${storeName}", chain="${chainName}"`);
+                  console.log(`[Basket] Storing CHP distance: ${dist}km for store="${storeName}" chain="${chainName}" canonical: "${canonicalStore}" / "${canonicalChain}"`);
                 }
               });
               console.log(`[Basket] Got ${Object.keys(storeDistancesFromCHP).length} store distances from CHP`);
@@ -379,21 +591,26 @@ exports.optimizeBasket = async (req, res) => {
       if (itemsFound > 0) {
         const coverage = (itemsFound / unpurchasedItems.length) * 100;
         
+        // Normalized names (used for display and CHP lookup)
+        const storeName = normalizeStoreText(store.name || '');
+        const chainName = normalizeStoreText(store.chain || '');
+        
         // Get distance from CHP if available (preferred - like chp.co.il), otherwise calculate from coordinates
         let storeWithDistance = store.toObject();
         let distance = null;
         
         // Priority 1: Use distance from CHP (when address is provided)
         if (Object.keys(storeDistancesFromCHP).length > 0) {
-          // Try multiple matching strategies
-          const storeName = store.name || '';
-          const chainName = store.chain || '';
-          
-          // Try exact matches first
-          distance = storeDistancesFromCHP[storeName] || 
+          const canonicalStore = getCanonicalStoreKey(storeName);
+          const canonicalChain = getCanonicalStoreKey(chainName);
+          // Try exact matches first (normalized + canonical so CHP corrupted names still match)
+          distance = storeDistancesFromCHP[storeName] ||
                      storeDistancesFromCHP[chainName] ||
                      storeDistancesFromCHP[`${chainName} ${storeName}`] ||
-                     storeDistancesFromCHP[`${storeName} ${chainName}`];
+                     storeDistancesFromCHP[`${storeName} ${chainName}`] ||
+                     storeDistancesFromCHP[canonicalStore] ||
+                     storeDistancesFromCHP[canonicalChain] ||
+                     (canonicalStore && canonicalChain ? storeDistancesFromCHP[`${canonicalChain} ${canonicalStore}`] || storeDistancesFromCHP[`${canonicalStore} ${canonicalChain}`] : null);
           
           // If no exact match, try partial matching (store name contains CHP key or vice versa)
           if (distance === null || distance === undefined) {
@@ -448,9 +665,17 @@ exports.optimizeBasket = async (req, res) => {
         
         if (distance !== null && distance !== undefined) {
           storeWithDistance.distance = distance; // Distance in kilometers
-          console.log(`[Basket] ✅ Set distance ${distance}km on store object: ${store.name} (${store.chain})`);
+          console.log(`[Basket] ✅ Set distance ${distance}km on store object: ${storeName} (${chainName})`);
         } else {
-          console.log(`[Basket] ⚠️ No distance set for store: ${store.name} (${store.chain}) - CHP: ${storeDistancesFromCHP[store.name] ? 'found' : 'not found'}, User coords: ${lat && lng ? 'yes' : 'no'}, City center: ${cityCenterLat && cityCenterLng ? 'yes' : 'no'}, Store coords: ${store.location?.coordinates ? 'yes' : 'no'}`);
+          console.log(`[Basket] ⚠️ No distance set for store: ${storeName} (${chainName}) - CHP: ${storeDistancesFromCHP[storeName] ? 'found' : 'not found'}, User coords: ${lat && lng ? 'yes' : 'no'}, City center: ${cityCenterLat && cityCenterLng ? 'yes' : 'no'}, Store coords: ${store.location?.coordinates ? 'yes' : 'no'}`);
+        }
+        
+        // Normalize display names (strip invisible Unicode) and hide stores with corrupted names
+        storeWithDistance.name = storeName;
+        storeWithDistance.chain = chainName;
+        if (isInvalidStoreName(storeName)) {
+          console.log(`[Basket] Hiding option with invalid store name: "${storeName}"`);
+          continue;
         }
         
         options.push({
@@ -483,14 +708,18 @@ exports.optimizeBasket = async (req, res) => {
           
           // Priority 1: Use distance from CHP (when address is provided)
           if (Object.keys(storeDistancesFromCHP).length > 0) {
-            const storeName = store.name || '';
-            const chainName = store.chain || '';
-            
-            // Try exact matches first
-            distance = storeDistancesFromCHP[storeName] || 
+            const storeName = normalizeStoreText(store.name || '');
+            const chainName = normalizeStoreText(store.chain || '');
+            const canonicalStore = getCanonicalStoreKey(storeName);
+            const canonicalChain = getCanonicalStoreKey(chainName);
+            // Try exact matches first (normalized + canonical)
+            distance = storeDistancesFromCHP[storeName] ||
                        storeDistancesFromCHP[chainName] ||
                        storeDistancesFromCHP[`${chainName} ${storeName}`] ||
-                       storeDistancesFromCHP[`${storeName} ${chainName}`];
+                       storeDistancesFromCHP[`${storeName} ${chainName}`] ||
+                       storeDistancesFromCHP[canonicalStore] ||
+                       storeDistancesFromCHP[canonicalChain] ||
+                       (canonicalStore && canonicalChain ? storeDistancesFromCHP[`${canonicalChain} ${canonicalStore}`] || storeDistancesFromCHP[`${canonicalStore} ${canonicalChain}`] : null);
             
             // If no exact match, try partial matching
             if (distance === null || distance === undefined) {
@@ -532,6 +761,10 @@ exports.optimizeBasket = async (req, res) => {
           if (distance !== null) {
             storeWithDistance.distance = distance; // Distance in kilometers
           }
+          
+          storeWithDistance.name = normalizeStoreText(store.name || '');
+          storeWithDistance.chain = normalizeStoreText(store.chain || '');
+          if (isInvalidStoreName(storeWithDistance.name)) continue;
           
           productPriceComparison[productId][storeId] = {
             price: priceInfo.price,
@@ -575,11 +808,36 @@ exports.optimizeBasket = async (req, res) => {
       return storeType === 'online' && opt.type === 'single_store';
     });
 
-    // Combine: physical first, then online
-    const finalOptions = [
-      ...physicalOptions.slice(0, 10),
-      ...onlineOptions.slice(0, 10),
+    // Take more options so products that appear in fewer stores (e.g. סטייק ציפס) still show
+    const physicalLimit = 20;
+    const onlineLimit = 10;
+    let finalOptions = [
+      ...physicalOptions.slice(0, physicalLimit),
+      ...onlineOptions.slice(0, onlineLimit),
     ];
+
+    // Ensure every product in the list appears in at least one shown option
+    const productIdsInList = unpurchasedItems
+      .map(item => item.product && (item.product._id || item.product))
+      .filter(Boolean)
+      .map(id => id.toString());
+    const productIdsInFinal = new Set();
+    finalOptions.forEach(opt => {
+      (opt.items || []).forEach(it => {
+        if (it.product && it.product._id) productIdsInFinal.add(it.product._id.toString());
+      });
+    });
+    productIdsInList.forEach(pid => {
+      if (productIdsInFinal.has(pid)) return;
+      const bestWithProduct = physicalOptions.find(opt =>
+        (opt.items || []).some(it => it.product && (it.product._id || it.product).toString() === pid)
+      ) || onlineOptions.find(opt =>
+        (opt.items || []).some(it => it.product && (it.product._id || it.product).toString() === pid)
+      );
+      if (bestWithProduct && !finalOptions.includes(bestWithProduct)) {
+        finalOptions.push(bestWithProduct);
+      }
+    });
 
     res.status(200).json({
       success: true,
